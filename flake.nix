@@ -23,6 +23,21 @@
         ''
       );
 
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
+          default = pkgs.buildGoModule {
+            pname = "nix-diff-closures-action";
+            version = "0.1.0";
+            src = ./.;
+            vendorHash = null;
+          };
+        }
+      );
+
       devShells = forAllSystems (
         system:
         let
@@ -41,6 +56,8 @@
                 findutils # xargs
                 nixd
                 go-task
+
+                go
 
                 dprint
                 typos

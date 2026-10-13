@@ -14,12 +14,14 @@ tasks:
       - task: lint
   test:
     cmds:
-      - echo 'Update here'
+      - CGO_ENABLED=0 go test -v ./...
   fmt:
     cmds:
+      - go fmt ./...
       - dprint fmt
   lint:
     cmds:
+      - CGO_ENABLED=0 go vet ./...
       - dprint check
       - typos . .github .vscode
       - zizmor .

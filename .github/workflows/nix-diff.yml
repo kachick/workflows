@@ -1,0 +1,15 @@
+name: ❄️ Diff
+on:
+  pull_request:
+    paths:
+      - 'flake.lock'
+      - '.github/workflows/nix-diff.yml'
+      - '.github/workflows/reusable-diff.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  diff:
+    uses: $/.github/workflows/reusable-diff.yml

@@ -1,0 +1,83 @@
+name: '[Reusable] Nix Closure Diff'
+
+on:
+  workflow_call:
+    inputs:
+      base-sha:
+        description: 'Base commit SHA (defaults to PR base SHA)'
+        required: false
+        type: string
+        default: ''
+      targets:
+        description: 'Newline- or comma-separated list of flake targets (defaults to devShells.${SYSTEM}.default)'
+        required: false
+        type: string
+        default: ''
+      post-comment:
+        description: 'Whether to post comment on pull request'
+        required: false
+        type: boolean
+        default: true
+      max-size:
+        description: 'Max characters before truncating comment'
+        required: false
+        type: number
+        default: 45000
+      head-size:
+        description: 'Max characters preview for truncated comments'
+        required: false
+        type: number
+        default: 40000
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  diff:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: NixOS/nix-installer-action@62c1943b776c509394b550f3f983adc14e9212d6 # v1.0.0
+
+      - name: Compute closure differences and post comment
+        id: diff
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ inputs.base-sha != '' && inputs.base-sha || github.event.pull_request.base.sha }}
+          TARGETS: ${{ inputs.targets }}
+          POST_COMMENT: ${{ inputs.post-comment }}
+          MAX_SIZE: ${{ inputs.max-size }}
+          HEAD_SIZE: ${{ inputs.head-size }}
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${WORKFLOW_REPOSITORY}" ] && [ -n "${WORKFLOW_SHA}" ]; then
+            FLAKE_REF="github:${WORKFLOW_REPOSITORY}/${WORKFLOW_SHA}"
+          else
+            FLAKE_REF="."
+          fi
+
+          nix run "${FLAKE_REF}" -- \
+            --base-rev="${BASE_SHA}" \
+            --targets="${TARGETS}" \
+            --post-comment="${POST_COMMENT}" \
+            --max-size="${MAX_SIZE}" \
+            --head-size="${HEAD_SIZE}" \
+            --output-comment="comment.md" \
+            --output-full-diff="diff.txt"
+
+      - name: Upload full diff artifact
+        if: steps.diff.outputs.is_truncated == 'true'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: nix-diff-full
+          path: diff.txt
