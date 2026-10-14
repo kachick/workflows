@@ -35,3 +35,9 @@
 
 - Any language is acceptable if bashless requirements are met.
 - Go is currently chosen to reduce context switching and setup time, and because `go run` is fast and available on standard runners.
+
+## Minimize token scope over immediacy
+
+- Prioritize minimizing the scope and exposure of `github.token` and GitHub App tokens above everything else.
+- Be willing to sacrifice immediacy (trading instant event triggers for periodic polling) to avoid unsafe secret access or broad write permissions on pull requests.
+- See [`pkgs/automerge`](pkgs/automerge/README.md) for details on this design trade-off.
