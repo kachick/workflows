@@ -2,10 +2,6 @@
 
 Post Nix closure differences on pull requests when `flake.lock` changes.
 
-> [!NOTE]
-> This tool is built for personal use cases.
-> It is not intended to be a general-purpose action with wide options.
-
 ## Features and Non-Obvious Requirements
 
 - **Multiple targets in a single run**:
