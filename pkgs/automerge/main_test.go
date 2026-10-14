@@ -110,6 +110,13 @@ func TestIsDisallowedDependabotMajor(t *testing.T) {
 		{title: "Bump cachix/install-nix-action from v26 to v27", disallowed: false},
 		{title: "Bump the rust group with 2 updates", disallowed: true},
 		{title: "Bump the dev-dependencies group in /sub/dir with 3 updates", disallowed: true},
+		{title: "Bump foo from 0.1.0 to 0.2.0", disallowed: true},
+		{title: "Bump foo from 0.1.0 to 0.1.1", disallowed: false},
+		{title: "Bump foo from v0.1.0 to v0.2.0", disallowed: true},
+		{title: "Bump foo from v0.1.0 to v0.1.1", disallowed: false},
+		{title: "Bump foo from 0.1 to 0.2", disallowed: true},
+		{title: "Bump foo from 0.1 to 0.1.1", disallowed: false},
+		{title: "Bump foo from 0.9.0 to 1.0.0", disallowed: true},
 		{title: "Update dependencies", disallowed: true},
 	}
 

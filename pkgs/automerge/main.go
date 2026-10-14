@@ -141,10 +141,14 @@ func parseConfig(args []string) (*Config, error) {
 	return cfg, nil
 }
 
-func extractMajor(v string) string {
+func extractVersionParts(v string) (major string, minor string) {
 	cleaned := strings.TrimPrefix(v, "v")
 	parts := strings.Split(cleaned, ".")
-	return parts[0]
+	major = parts[0]
+	if len(parts) > 1 {
+		minor = parts[1]
+	}
+	return major, minor
 }
 
 func isDisallowedDependabotMajor(title string) bool {
@@ -167,7 +171,19 @@ func isDisallowedDependabotMajor(title string) bool {
 		return false
 	}
 
-	return extractMajor(oldVer) != extractMajor(newVer)
+	oldMajor, oldMinor := extractVersionParts(oldVer)
+	newMajor, newMinor := extractVersionParts(newVer)
+
+	if oldMajor != newMajor {
+		return true
+	}
+
+	// SemVer treats minor updates in 0.x releases as breaking changes (e.g. 0.1.0 -> 0.2.0).
+	if oldMajor == "0" && oldMinor != newMinor {
+		return true
+	}
+
+	return false
 }
 
 func isAllowedBot(login string, allowedBots []string) bool {
