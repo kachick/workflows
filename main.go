@@ -106,12 +106,12 @@ func run() error {
 
 	if rep.HasDiff {
 		if outComment != "" {
-			if err := os.WriteFile(outComment, []byte(rep.CommentMarkdown), 0644); err != nil {
+			if err := os.WriteFile(outComment, []byte(rep.CommentMarkdown), 0o644); err != nil {
 				return fmt.Errorf("failed to write comment file: %w", err)
 			}
 		}
 		if outFullDiff != "" {
-			if err := os.WriteFile(outFullDiff, []byte(rep.FullDiffText), 0644); err != nil {
+			if err := os.WriteFile(outFullDiff, []byte(rep.FullDiffText), 0o644); err != nil {
 				return fmt.Errorf("failed to write full diff file: %w", err)
 			}
 		}
@@ -183,7 +183,7 @@ func writeGHAOutput(key, value string) {
 	if outputFile == "" {
 		return
 	}
-	f, err := os.OpenFile(outputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(outputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
 	}
@@ -196,7 +196,7 @@ func writeStepSummary(markdown string) {
 	if summaryFile == "" {
 		return
 	}
-	f, err := os.OpenFile(summaryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(summaryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
 	}

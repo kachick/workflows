@@ -29,7 +29,7 @@
           pkgs = nixpkgs.legacyPackages.${system};
         in
         {
-          default = pkgs.buildGoModule {
+          default = pkgs.buildGo127Module {
             pname = "nix-diff-closures-action";
             version = "0.1.0";
             src = ./.;
@@ -57,7 +57,7 @@
                 nixd
                 go-task
 
-                go
+                go_1_27
 
                 dprint
                 typos

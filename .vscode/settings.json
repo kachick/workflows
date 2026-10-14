@@ -1,6 +1,9 @@
 {
   "editor.defaultFormatter": "dprint.dprint",
   "editor.formatOnSave": true,
+  "gopls": {
+    "formatting.gofumpt": true
+  },
   "nix.enableLanguageServer": true,
   "nix.serverPath": "nixd"
 }

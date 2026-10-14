@@ -17,7 +17,6 @@ tasks:
       - CGO_ENABLED=0 go test -v ./...
   fmt:
     cmds:
-      - go fmt ./...
       - dprint fmt
   lint:
     cmds:
