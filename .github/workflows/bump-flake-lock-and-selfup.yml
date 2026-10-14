@@ -4,10 +4,6 @@ permissions:
   contents: read
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/bump-flake-lock-and-selfup.yml'
-      - '.github/workflows/reusable-bump-flake-lock.yml'
   schedule:
     # Every 10:17(JST) on Monday
     # https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule
@@ -20,7 +16,6 @@ jobs:
     uses: $/.github/workflows/reusable-bump-flake-lock.yml
     with:
       app-id: ${{ vars.SAMU_APP_ID }}
-      dry-run: ${{ github.event_name == 'pull_request' }}
       post-commit-lock-file: nix develop --command task selfup
       post-commit-lock-file-title: 'Sync CI dependencies with nixpkgs'
     secrets:

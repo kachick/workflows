@@ -4,10 +4,6 @@ permissions:
   contents: read
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/automerge.yml'
-      - '.github/workflows/reusable-automerge.yml'
   schedule:
     # Run every 2 hours at minute 17 to avoid traffic peaks
     - cron: '17 */2 * * *'
@@ -18,6 +14,5 @@ jobs:
     uses: $/.github/workflows/reusable-automerge.yml
     with:
       app-id: ${{ vars.SAMU_APP_ID }}
-      dry-run: ${{ github.event_name == 'pull_request' }}
     secrets:
       APP_PRIVATE_KEY: ${{ secrets.SAMU_APP_PRIVATE_KEY }}

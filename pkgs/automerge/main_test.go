@@ -16,9 +16,6 @@ func TestParseConfigDefaults(t *testing.T) {
 	if cfg.MergeMethod != "squash" {
 		t.Errorf("expected default merge-method 'squash', got %q", cfg.MergeMethod)
 	}
-	if cfg.DryRun != false {
-		t.Errorf("expected default dry-run false, got %v", cfg.DryRun)
-	}
 	if !slices.Equal(cfg.AllowedBots, defaultAllowedBots) {
 		t.Errorf("expected default allowed bots, got %v", cfg.AllowedBots)
 	}
@@ -28,7 +25,6 @@ func TestParseConfigFlags(t *testing.T) {
 	args := []string{
 		"--merge-method=rebase",
 		"--allowed-bots=custom-bot,another-bot",
-		"--dry-run=true",
 	}
 
 	cfg, err := parseConfig(args)
@@ -38,9 +34,6 @@ func TestParseConfigFlags(t *testing.T) {
 
 	if cfg.MergeMethod != "rebase" {
 		t.Errorf("expected 'rebase', got %q", cfg.MergeMethod)
-	}
-	if cfg.DryRun != true {
-		t.Errorf("expected dry-run true, got %v", cfg.DryRun)
 	}
 	expectedBots := []string{"custom-bot", "another-bot"}
 	if !slices.Equal(cfg.AllowedBots, expectedBots) {
@@ -58,7 +51,6 @@ func TestParseConfigInvalidMethod(t *testing.T) {
 func TestParseConfigEnvFallback(t *testing.T) {
 	t.Setenv("MERGE_METHOD", "merge")
 	t.Setenv("ALLOWED_BOTS", "env-bot")
-	t.Setenv("DRY_RUN", "true")
 
 	cfg, err := parseConfig([]string{})
 	if err != nil {
@@ -67,9 +59,6 @@ func TestParseConfigEnvFallback(t *testing.T) {
 
 	if cfg.MergeMethod != "merge" {
 		t.Errorf("expected merge-method from env, got %q", cfg.MergeMethod)
-	}
-	if cfg.DryRun != true {
-		t.Errorf("expected dry-run from env, got %v", cfg.DryRun)
 	}
 	expectedBots := []string{"env-bot"}
 	if !slices.Equal(cfg.AllowedBots, expectedBots) {
@@ -338,7 +327,6 @@ func TestExecute(t *testing.T) {
 	cfg := &Config{
 		AllowedBots: defaultAllowedBots,
 		MergeMethod: "squash",
-		DryRun:      false,
 	}
 
 	err := execute(context.Background(), cfg, runner)
@@ -350,38 +338,5 @@ func TestExecute(t *testing.T) {
 	expectedMerged := []int{103}
 	if !slices.Equal(runner.mergedPRs, expectedMerged) {
 		t.Errorf("expected merged PRs %v, got %v", expectedMerged, runner.mergedPRs)
-	}
-}
-
-func TestExecuteDryRun(t *testing.T) {
-	validChecks := []StatusCheckItem{
-		{Status: "COMPLETED", Conclusion: "SUCCESS"},
-	}
-
-	runner := &mockRunner{
-		prs: []PullRequest{
-			{
-				Number:            201,
-				Title:             "Renovate PR",
-				Author:            Author{Login: "renovate[bot]"},
-				Mergeable:         "MERGEABLE",
-				StatusCheckRollup: validChecks,
-			},
-		},
-	}
-
-	cfg := &Config{
-		AllowedBots: defaultAllowedBots,
-		MergeMethod: "squash",
-		DryRun:      true,
-	}
-
-	err := execute(context.Background(), cfg, runner)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(runner.mergedPRs) > 0 {
-		t.Errorf("expected no PRs merged in dry-run, got %v", runner.mergedPRs)
 	}
 }

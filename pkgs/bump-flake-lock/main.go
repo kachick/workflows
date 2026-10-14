@@ -19,7 +19,6 @@ type Config struct {
 	PostCommitTitle string
 	PRTitle         string
 	PRBody          string
-	DryRun          bool
 	GitUserName     string
 	GitUserEmail    string
 }
@@ -106,7 +105,6 @@ func parseConfig(args []string) (*Config, error) {
 	fs.StringVar(&cfg.PostCommitTitle, "post-commit-title", "", "Commit message for post-command changes")
 	fs.StringVar(&cfg.PRTitle, "pr-title", "Bump flake.lock and related dependencies", "Title for the pull request")
 	fs.StringVar(&cfg.PRBody, "pr-body", "", "Additional body for the pull request")
-	fs.BoolVar(&cfg.DryRun, "dry-run", false, "Skip git push and PR creation when true")
 	fs.StringVar(&cfg.GitUserName, "git-user-name", "github-actions[bot]", "Git committer user name")
 	fs.StringVar(&cfg.GitUserEmail, "git-user-email", "41898282+github-actions[bot]@users.noreply.github.com", "Git committer user email")
 
@@ -129,11 +127,6 @@ func parseConfig(args []string) (*Config, error) {
 	}
 	if env := os.Getenv("PR_BODY"); env != "" && cfg.PRBody == "" {
 		cfg.PRBody = env
-	}
-	if env := os.Getenv("DRY_RUN"); env != "" && !cfg.DryRun {
-		if b, err := strconv.ParseBool(env); err == nil {
-			cfg.DryRun = b
-		}
 	}
 
 	return cfg, nil
@@ -277,11 +270,6 @@ func execute(ctx context.Context, cfg *Config) error {
 	}
 
 	fmt.Printf("Found %d commit(s).\n", count)
-	if cfg.DryRun {
-		fmt.Println("Dry run enabled. Skipping push and PR creation.")
-		return nil
-	}
-
 	fmt.Printf("Pushing to %s...\n", cfg.BranchName)
 	if err := runCmd(ctx, env, "git", "push", "origin", cfg.BranchName, "--force"); err != nil {
 		return fmt.Errorf("failed to push to %s: %w", cfg.BranchName, err)

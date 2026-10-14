@@ -32,11 +32,6 @@ on:
         required: false
         type: string
         default: 'bot-update-flake-lock'
-      dry-run:
-        description: 'Skip git push and PR creation when true'
-        required: false
-        type: boolean
-        default: false
     secrets:
       APP_PRIVATE_KEY:
         description: 'GitHub App private key'
@@ -85,7 +80,6 @@ jobs:
           POST_COMMIT_TITLE: ${{ inputs.post-commit-lock-file-title }}
           PR_TITLE: ${{ inputs.pr-title }}
           PR_BODY: ${{ inputs.pr-body }}
-          DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -euo pipefail
 
@@ -100,5 +94,4 @@ jobs:
             --post-command="${POST_COMMAND}" \
             --post-commit-title="${POST_COMMIT_TITLE}" \
             --pr-title="${PR_TITLE}" \
-            --pr-body="${PR_BODY}" \
-            --dry-run="${DRY_RUN}"
+            --pr-body="${PR_BODY}"

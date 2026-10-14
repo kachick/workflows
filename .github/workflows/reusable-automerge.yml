@@ -17,11 +17,6 @@ on:
         required: false
         type: string
         default: ''
-      dry-run:
-        description: 'Skip merging when true'
-        required: false
-        type: boolean
-        default: false
     secrets:
       APP_PRIVATE_KEY:
         description: 'GitHub App private key'
@@ -63,7 +58,6 @@ jobs:
           WORKFLOW_SHA: ${{ job.workflow_sha }}
           MERGE_METHOD: ${{ inputs.merge-method }}
           ALLOWED_BOTS: ${{ inputs.allowed-bots }}
-          DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -euo pipefail
 
@@ -75,5 +69,4 @@ jobs:
 
           nix run "${FLAKE_REF}#automerge" -- \
             --merge-method="${MERGE_METHOD}" \
-            --allowed-bots="${ALLOWED_BOTS}" \
-            --dry-run="${DRY_RUN}"
+            --allowed-bots="${ALLOWED_BOTS}"

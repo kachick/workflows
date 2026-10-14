@@ -45,7 +45,6 @@ type StatusCheckItem struct {
 type Config struct {
 	AllowedBots []string
 	MergeMethod string
-	DryRun      bool
 }
 
 type CommandRunner interface {
@@ -114,7 +113,6 @@ func parseConfig(args []string) (*Config, error) {
 
 	fs.StringVar(&allowedBotsRaw, "allowed-bots", "", "Comma-separated list of allowed bot logins")
 	fs.StringVar(&cfg.MergeMethod, "merge-method", "squash", "Merge method (squash, merge, or rebase)")
-	fs.BoolVar(&cfg.DryRun, "dry-run", false, "Skip merging when true")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -125,11 +123,6 @@ func parseConfig(args []string) (*Config, error) {
 	}
 	if env := os.Getenv("MERGE_METHOD"); env != "" && cfg.MergeMethod == "squash" {
 		cfg.MergeMethod = env
-	}
-	if env := os.Getenv("DRY_RUN"); env != "" && !cfg.DryRun {
-		if b, err := strconv.ParseBool(env); err == nil {
-			cfg.DryRun = b
-		}
 	}
 
 	validMethods := map[string]bool{"squash": true, "merge": true, "rebase": true}
@@ -251,11 +244,6 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner) error {
 	}
 
 	for _, pr := range eligible {
-		if cfg.DryRun {
-			fmt.Printf("Would merge PR #%d (%s) with %s (dry-run)\n", pr.Number, pr.Title, cfg.MergeMethod)
-			continue
-		}
-
 		fmt.Printf("Attempting to merge PR #%d (%s)...\n", pr.Number, pr.Title)
 		if err := runner.MergePR(ctx, pr.Number, cfg.MergeMethod); err != nil {
 			fmt.Printf("Failed to merge PR #%d (possibly conflicting with a prior merge). Skipping for next run: %v\n", pr.Number, err)

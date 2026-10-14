@@ -36,9 +36,6 @@ func TestParseConfigDefaults(t *testing.T) {
 	if cfg.PRBody != "" {
 		t.Errorf("expected default pr-body '', got %q", cfg.PRBody)
 	}
-	if cfg.DryRun != false {
-		t.Errorf("expected default dry-run false, got %v", cfg.DryRun)
-	}
 }
 
 func TestParseConfigFlags(t *testing.T) {
@@ -48,7 +45,6 @@ func TestParseConfigFlags(t *testing.T) {
 		"--post-commit-title=custom title",
 		"--pr-title=Custom PR",
 		"--pr-body=Custom body",
-		"--dry-run=true",
 	}
 
 	cfg, err := parseConfig(args)
@@ -71,16 +67,12 @@ func TestParseConfigFlags(t *testing.T) {
 	if cfg.PRBody != "Custom body" {
 		t.Errorf("expected 'Custom body', got %q", cfg.PRBody)
 	}
-	if cfg.DryRun != true {
-		t.Errorf("expected dry-run true, got %v", cfg.DryRun)
-	}
 }
 
 func TestParseConfigEnvFallback(t *testing.T) {
 	t.Setenv("PR_BRANCH", "env-branch")
 	t.Setenv("POST_COMMAND", "env-command")
 	t.Setenv("PR_BODY", "env-body")
-	t.Setenv("DRY_RUN", "true")
 
 	cfg, err := parseConfig([]string{})
 	if err != nil {
@@ -95,9 +87,6 @@ func TestParseConfigEnvFallback(t *testing.T) {
 	}
 	if cfg.PRBody != "env-body" {
 		t.Errorf("expected pr-body from env, got %q", cfg.PRBody)
-	}
-	if cfg.DryRun != true {
-		t.Errorf("expected dry-run from env, got %v", cfg.DryRun)
 	}
 }
 
