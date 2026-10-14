@@ -1,0 +1,189 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+)
+
+type Config struct {
+	BranchName      string
+	PostCommand     string
+	PostCommitTitle string
+	PRTitle         string
+	PRBody          string
+	DryRun          bool
+	GitUserName     string
+	GitUserEmail    string
+}
+
+func main() {
+	if err := run(context.Background(), os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, args []string) error {
+	cfg, err := parseConfig(args)
+	if err != nil {
+		return err
+	}
+	return execute(ctx, cfg)
+}
+
+func parseConfig(args []string) (*Config, error) {
+	fs := flag.NewFlagSet("bump-flake-lock", flag.ContinueOnError)
+
+	cfg := &Config{}
+	fs.StringVar(&cfg.BranchName, "branch-name", "bot-update-flake-lock", "Branch name to push changes to")
+	fs.StringVar(&cfg.PostCommand, "post-command", "", "Command to run after updating flake.lock")
+	fs.StringVar(&cfg.PostCommitTitle, "post-commit-title", "", "Commit message for post-command changes")
+	fs.StringVar(&cfg.PRTitle, "pr-title", "Bump flake.lock and related dependencies", "Title for the pull request")
+	fs.StringVar(&cfg.PRBody, "pr-body", "This PR was generated automatically.", "Body for the pull request")
+	fs.BoolVar(&cfg.DryRun, "dry-run", false, "Skip git push and PR creation when true")
+	fs.StringVar(&cfg.GitUserName, "git-user-name", "github-actions[bot]", "Git committer user name")
+	fs.StringVar(&cfg.GitUserEmail, "git-user-email", "41898282+github-actions[bot]@users.noreply.github.com", "Git committer user email")
+
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+
+	// Environment variable fallbacks for GitHub Actions
+	if env := os.Getenv("PR_BRANCH"); env != "" && cfg.BranchName == "bot-update-flake-lock" {
+		cfg.BranchName = env
+	}
+	if env := os.Getenv("POST_COMMAND"); env != "" && cfg.PostCommand == "" {
+		cfg.PostCommand = env
+	}
+	if env := os.Getenv("POST_COMMIT_TITLE"); env != "" && cfg.PostCommitTitle == "" {
+		cfg.PostCommitTitle = env
+	}
+	if env := os.Getenv("PR_TITLE"); env != "" && cfg.PRTitle == "Bump flake.lock and related dependencies" {
+		cfg.PRTitle = env
+	}
+	if env := os.Getenv("PR_BODY"); env != "" && cfg.PRBody == "This PR was generated automatically." {
+		cfg.PRBody = env
+	}
+	if env := os.Getenv("DRY_RUN"); env != "" && !cfg.DryRun {
+		if b, err := strconv.ParseBool(env); err == nil {
+			cfg.DryRun = b
+		}
+	}
+
+	return cfg, nil
+}
+
+func runCmd(ctx context.Context, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
+func runCmdOutput(ctx context.Context, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+func execute(ctx context.Context, cfg *Config) error {
+	if err := runCmd(ctx, "git", "config", "user.name", cfg.GitUserName); err != nil {
+		return fmt.Errorf("failed to set git user.name: %w", err)
+	}
+	if err := runCmd(ctx, "git", "config", "user.email", cfg.GitUserEmail); err != nil {
+		return fmt.Errorf("failed to set git user.email: %w", err)
+	}
+	if err := runCmd(ctx, "git", "switch", "-C", cfg.BranchName); err != nil {
+		return fmt.Errorf("failed to switch branch to %s: %w", cfg.BranchName, err)
+	}
+
+	if err := runCmd(ctx, "nix", "flake", "update", "--commit-lock-file"); err != nil {
+		return fmt.Errorf("failed to update flake.lock: %w", err)
+	}
+
+	if cfg.PostCommand != "" {
+		cmd := exec.CommandContext(ctx, "sh", "-c", cfg.PostCommand)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to run post-command: %w", err)
+		}
+
+		status, err := runCmdOutput(ctx, "git", "status", "--porcelain")
+		if err != nil {
+			return fmt.Errorf("failed to check git status: %w", err)
+		}
+		if status != "" {
+			title := cfg.PostCommitTitle
+			if title == "" {
+				title = cfg.PostCommand
+			}
+			if err := runCmd(ctx, "git", "add", "-A"); err != nil {
+				return fmt.Errorf("failed to stage post-command changes: %w", err)
+			}
+			if err := runCmd(ctx, "git", "commit", "-m", title); err != nil {
+				return fmt.Errorf("failed to commit post-command changes: %w", err)
+			}
+		}
+	}
+
+	defaultBranch, err := runCmdOutput(ctx, "git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	if err != nil || defaultBranch == "" {
+		defaultBranch = "main"
+	} else {
+		defaultBranch = strings.TrimPrefix(defaultBranch, "origin/")
+	}
+
+	countStr, err := runCmdOutput(ctx, "git", "rev-list", "--count", fmt.Sprintf("origin/%s..", defaultBranch))
+	if err != nil {
+		return fmt.Errorf("failed to count commits ahead of origin/%s: %w", defaultBranch, err)
+	}
+	count, err := strconv.Atoi(countStr)
+	if err != nil {
+		return fmt.Errorf("invalid commit count %q: %w", countStr, err)
+	}
+
+	if count <= 0 {
+		fmt.Println("No commits added. Nothing to push or create.")
+		return nil
+	}
+
+	fmt.Printf("Found %d commit(s).\n", count)
+	if cfg.DryRun {
+		fmt.Println("Dry run enabled. Skipping push and PR creation.")
+		return nil
+	}
+
+	fmt.Printf("Pushing to %s...\n", cfg.BranchName)
+	if err := runCmd(ctx, "git", "push", "origin", cfg.BranchName, "--force"); err != nil {
+		return fmt.Errorf("failed to push to %s: %w", cfg.BranchName, err)
+	}
+
+	prState, _ := runCmdOutput(ctx, "gh", "pr", "view", cfg.BranchName, "--json", "state", "--jq", ".state")
+	if strings.TrimSpace(prState) != "OPEN" {
+		createArgs := []string{
+			"pr", "create",
+			"--base", defaultBranch,
+			"--head", cfg.BranchName,
+			"--title", cfg.PRTitle,
+			"--body", cfg.PRBody,
+		}
+		if err := runCmd(ctx, "gh", createArgs...); err != nil {
+			return fmt.Errorf("failed to create PR: %w", err)
+		}
+	}
+
+	return nil
+}

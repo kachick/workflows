@@ -31,3 +31,9 @@ jobs:
     secrets:
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
 ```
+
+### CLI
+
+```console
+nix run github:kachick/workflows#bump-flake-lock -- --help
+```
