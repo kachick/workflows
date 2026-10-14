@@ -39,9 +39,9 @@ jobs:
           CLI_VERSION: ${{ inputs.betterleaks-version }}
         run: |
           tar zxvf "betterleaks_${CLI_VERSION}_linux_x64.tar.gz"
-          mkdir --parents "${RUNNER_TEMP}/betterleaks/bin"
-          mv betterleaks "${RUNNER_TEMP}/betterleaks/bin"
-          echo "${RUNNER_TEMP}/betterleaks/bin" >> "${GITHUB_PATH}"
+          mkdir --parents "${RUNNER_TEMP}/bin"
+          mv betterleaks "${RUNNER_TEMP}/bin/"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
       - name: Make sure installed betterleaks version
         run: 'betterleaks version'
