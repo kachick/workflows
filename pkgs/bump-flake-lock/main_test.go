@@ -1,8 +1,25 @@
 package main
 
 import (
+	"slices"
 	"testing"
 )
+
+func TestFilterEnv(t *testing.T) {
+	env := []string{
+		"PATH=/usr/bin",
+		"GITHUB_TOKEN=secret-token",
+		"GH_TOKEN=another-secret",
+		"USER=runner",
+	}
+
+	got := filterEnv(env, "GITHUB_TOKEN=", "GH_TOKEN=")
+	expected := []string{"PATH=/usr/bin", "USER=runner"}
+
+	if !slices.Equal(got, expected) {
+		t.Errorf("filterEnv() = %v, want %v", got, expected)
+	}
+}
 
 func TestParseConfigDefaults(t *testing.T) {
 	cfg, err := parseConfig([]string{})

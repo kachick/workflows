@@ -148,6 +148,23 @@ func gitEnv(cfg *Config) []string {
 	)
 }
 
+func filterEnv(env []string, droppedPrefixes ...string) []string {
+	var filtered []string
+	for _, e := range env {
+		dropped := false
+		for _, prefix := range droppedPrefixes {
+			if strings.HasPrefix(e, prefix) {
+				dropped = true
+				break
+			}
+		}
+		if !dropped {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
 func runCmd(ctx context.Context, env []string, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	if len(env) > 0 {
@@ -186,7 +203,8 @@ func execute(ctx context.Context, cfg *Config) error {
 
 	if cfg.PostCommand != "" {
 		cmd := exec.CommandContext(ctx, "sh", "-c", cfg.PostCommand)
-		cmd.Env = env
+		// Avoid passing powerful GitHub tokens to external post-update commands.
+		cmd.Env = filterEnv(env, "GITHUB_TOKEN=", "GH_TOKEN=")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
