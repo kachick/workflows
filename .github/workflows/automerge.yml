@@ -1,4 +1,4 @@
-name: Automerge bot PRs
+name: 🤖👌🤖
 on:
   schedule:
     # Run every 2 hours at minute 17 to avoid traffic peaks
