@@ -60,6 +60,7 @@
                 go-task
 
                 go_1_27
+                betterleaks
 
                 dprint
                 typos

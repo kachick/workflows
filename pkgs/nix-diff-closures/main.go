@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kachick/workflows/internal/leakcheck"
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/diff"
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/gh"
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/report"
@@ -108,6 +109,11 @@ func run() error {
 	}
 
 	if rep.HasDiff {
+		checker := &leakcheck.BetterleaksChecker{}
+		if err := leakcheck.CheckMultiple(ctx, checker, rep.CommentMarkdown, rep.FullDiffText); err != nil {
+			return fmt.Errorf("pre-flight leak check failed for diff report: %w", err)
+		}
+
 		if outComment != "" {
 			if err := os.WriteFile(outComment, []byte(rep.CommentMarkdown), 0o644); err != nil {
 				return fmt.Errorf("failed to write comment file: %w", err)

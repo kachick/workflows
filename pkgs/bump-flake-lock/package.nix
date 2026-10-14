@@ -1,6 +1,8 @@
 {
   lib,
   buildGo127Module,
+  makeWrapper,
+  betterleaks,
 }:
 
 buildGo127Module (finalAttrs: {
@@ -13,11 +15,22 @@ buildGo127Module (finalAttrs: {
     root = ../../.;
     fileset = lib.fileset.unions [
       ../../go.mod
+      ../../internal/leakcheck
       ./.
     ];
   };
 
   vendorHash = null;
+
+  nativeBuildInputs = [ makeWrapper ];
+
+  postInstall = ''
+    wrapProgram $out/bin/bump-flake-lock --prefix PATH : ${
+      lib.makeBinPath [
+        betterleaks
+      ]
+    }
+  '';
 
   env.CGO_ENABLED = "0";
 

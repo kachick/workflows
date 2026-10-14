@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/kachick/workflows/internal/leakcheck"
 )
 
 type Config struct {
@@ -200,6 +202,10 @@ func execute(ctx context.Context, cfg *Config) error {
 			if title == "" {
 				title = cfg.PostCommand
 			}
+			checker := &leakcheck.BetterleaksChecker{}
+			if err := checker.Check(ctx, title); err != nil {
+				return fmt.Errorf("pre-flight leak check failed for post-command commit message: %w", err)
+			}
 			if err := runCmd(ctx, env, "git", "add", "-A"); err != nil {
 				return fmt.Errorf("failed to stage post-command changes: %w", err)
 			}
@@ -233,6 +239,11 @@ func execute(ctx context.Context, cfg *Config) error {
 	if count <= 0 {
 		fmt.Println("No commits added. Nothing to push or create.")
 		return nil
+	}
+
+	checker := &leakcheck.BetterleaksChecker{}
+	if err := leakcheck.CheckMultiple(ctx, checker, cfg.PRTitle, body); err != nil {
+		return fmt.Errorf("pre-flight leak check failed for pull request payload: %w", err)
 	}
 
 	fmt.Printf("Found %d commit(s).\n", count)

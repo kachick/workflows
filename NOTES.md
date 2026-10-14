@@ -47,3 +47,11 @@
 - Prioritize minimizing the scope and exposure of `github.token` and GitHub App tokens above everything else.
 - Be willing to sacrifice immediacy (trading instant event triggers for periodic polling) to avoid unsafe secret access or broad write permissions on pull requests.
 - See [`pkgs/automerge`](pkgs/automerge/README.md) for details on this design trade-off.
+
+## Leak prevention on external sinks
+
+- Prioritize preventing secret exposure to external sinks over convenience.
+- GitHub Actions automatically masks registered secrets in console logs, but does not mask payloads sent to external sinks (such as pull request titles, pull request comments, commit messages, and uploaded artifacts).
+- Accidental leaks caused by implementation bugs or unexpected command outputs would immediately expose secrets to the public.
+- Verify all data sent to external sinks with `betterleaks` before posting.
+- Call `betterleaks` as an external tool wrapped by Nix (`makeWrapper`) instead of importing the Go SDK directly to keep `go.mod` free of third-party dependencies (`vendorHash = null`).
