@@ -55,6 +55,16 @@ func TestTruncateUTF8Safe(t *testing.T) {
 }
 
 func TestBuildReport(t *testing.T) {
+	completeMeta := WorkflowMetadata{
+		ServerURL:          "https://github.com",
+		Repository:         "kachick/workflows",
+		RunID:              "12345678",
+		WorkflowRepository: "kachick/workflows",
+		WorkflowSHA:        "c4c03dd9c5377b99ca53183897baaf53114b86db",
+		WorkflowFilePath:   ".github/workflows/reusable-nix-diff-closures.yml",
+	}
+	expectedProvenance := "This report was generated automatically by [workflow run](https://github.com/kachick/workflows/actions/runs/12345678) (defined at [kachick/workflows](https://github.com/kachick/workflows/blob/c4c03dd9c5377b99ca53183897baaf53114b86db/.github/workflows/reusable-nix-diff-closures.yml))."
+
 	t.Run("no diff across targets", func(t *testing.T) {
 		results := []TargetResult{
 			{
@@ -63,7 +73,10 @@ func TestBuildReport(t *testing.T) {
 			},
 		}
 
-		rep := Build(results, 1000, 500, "", "", "")
+		rep, err := Build(results, 1000, 500, completeMeta, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if rep.HasDiff {
 			t.Fatal("expected HasDiff = false")
 		}
@@ -72,7 +85,7 @@ func TestBuildReport(t *testing.T) {
 		}
 	})
 
-	t.Run("single target with diff", func(t *testing.T) {
+	t.Run("single target with diff and provenance header", func(t *testing.T) {
 		diffText := "bash: 5.2 → 5.3, +10.0 KiB\n"
 		results := []TargetResult{
 			{
@@ -81,12 +94,18 @@ func TestBuildReport(t *testing.T) {
 			},
 		}
 
-		rep := Build(results, 1000, 500, "https://github.com", "owner/repo", "123")
+		rep, err := Build(results, 1000, 500, completeMeta, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if !rep.HasDiff {
 			t.Fatal("expected HasDiff = true")
 		}
 		if !strings.Contains(rep.CommentMarkdown, Marker) {
 			t.Fatal("marker not found in comment")
+		}
+		if !strings.Contains(rep.CommentMarkdown, expectedProvenance) {
+			t.Fatalf("expected provenance %q in comment, got: %s", expectedProvenance, rep.CommentMarkdown)
 		}
 		if !strings.Contains(rep.CommentMarkdown, diffText) {
 			t.Fatal("diff text not found in comment")
@@ -111,18 +130,57 @@ func TestBuildReport(t *testing.T) {
 
 		maxSize := 100
 		headSize := 50
-		rep := Build(results, maxSize, headSize, "https://github.com", "owner/repo", "123")
+		rep, err := Build(results, maxSize, headSize, completeMeta, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if !rep.HasDiff {
 			t.Fatal("expected HasDiff = true")
 		}
 		if !rep.IsTruncated {
 			t.Fatal("expected IsTruncated = true")
 		}
-		if !strings.Contains(rep.CommentMarkdown, "[Job Artifacts]") {
-			t.Fatal("artifact note expected")
+		expectedArtifactLink := "https://github.com/kachick/workflows/actions/runs/12345678#artifacts"
+		if !strings.Contains(rep.CommentMarkdown, expectedArtifactLink) {
+			t.Fatalf("expected artifact link %q, got: %s", expectedArtifactLink, rep.CommentMarkdown)
 		}
 		if !strings.Contains(rep.CommentMarkdown, "<summary><b>packages.x86_64-linux.default</b> (unchanged)</summary>") {
 			t.Fatal("unchanged target summary expected")
+		}
+	})
+
+	t.Run("incomplete metadata fails fast in CI environment", func(t *testing.T) {
+		incomplete := completeMeta
+		incomplete.WorkflowFilePath = ""
+		results := []TargetResult{
+			{
+				Target:   "devShells.x86_64-linux.default",
+				DiffText: "diff",
+			},
+		}
+
+		_, err := Build(results, 1000, 500, incomplete, true)
+		if err == nil {
+			t.Fatal("expected error when workflow metadata is incomplete in CI, got nil")
+		}
+	})
+
+	t.Run("incomplete metadata falls back to default outside CI", func(t *testing.T) {
+		incomplete := WorkflowMetadata{}
+		results := []TargetResult{
+			{
+				Target:   "devShells.x86_64-linux.default",
+				DiffText: "diff",
+			},
+		}
+
+		rep, err := Build(results, 1000, 500, incomplete, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expectedFallback := "This report was generated automatically."
+		if !strings.Contains(rep.CommentMarkdown, expectedFallback) {
+			t.Fatalf("expected fallback text %q in comment, got: %s", expectedFallback, rep.CommentMarkdown)
 		}
 	})
 }

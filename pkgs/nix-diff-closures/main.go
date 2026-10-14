@@ -99,10 +99,13 @@ func run() error {
 		return fmt.Errorf("failed to compute closure diffs: %w", err)
 	}
 
-	serverURL := os.Getenv("GITHUB_SERVER_URL")
-	runID := os.Getenv("GITHUB_RUN_ID")
+	meta := getWorkflowMetadata()
+	isCI := os.Getenv("GITHUB_ACTIONS") == "true"
 
-	rep := report.Build(results, maxSize, headSize, serverURL, repo, runID)
+	rep, err := report.Build(results, maxSize, headSize, meta, isCI)
+	if err != nil {
+		return fmt.Errorf("failed to build report: %w", err)
+	}
 
 	if rep.HasDiff {
 		if outComment != "" {
@@ -202,4 +205,19 @@ func writeStepSummary(markdown string) {
 	}
 	defer f.Close()
 	_, _ = fmt.Fprintln(f, markdown)
+}
+
+func getWorkflowMetadata() report.WorkflowMetadata {
+	serverURL := os.Getenv("GITHUB_SERVER_URL")
+	if serverURL == "" {
+		serverURL = "https://github.com"
+	}
+	return report.WorkflowMetadata{
+		ServerURL:          serverURL,
+		Repository:         os.Getenv("GITHUB_REPOSITORY"),
+		RunID:              os.Getenv("GITHUB_RUN_ID"),
+		WorkflowRepository: os.Getenv("WORKFLOW_REPOSITORY"),
+		WorkflowSHA:        os.Getenv("WORKFLOW_SHA"),
+		WorkflowFilePath:   os.Getenv("WORKFLOW_FILE_PATH"),
+	}
 }

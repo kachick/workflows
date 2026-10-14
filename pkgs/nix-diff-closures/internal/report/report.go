@@ -26,6 +26,34 @@ type TargetResult struct {
 	Error    string
 }
 
+// WorkflowMetadata holds information about the workflow run and definition.
+type WorkflowMetadata struct {
+	ServerURL          string
+	Repository         string
+	RunID              string
+	WorkflowRepository string
+	WorkflowSHA        string
+	WorkflowFilePath   string
+}
+
+// IsComplete checks whether all required fields for workflow provenance are present.
+func (m WorkflowMetadata) IsComplete() bool {
+	return m.ServerURL != "" &&
+		m.Repository != "" &&
+		m.RunID != "" &&
+		m.WorkflowRepository != "" &&
+		m.WorkflowSHA != "" &&
+		m.WorkflowFilePath != ""
+}
+
+// HeaderText returns markdown describing the workflow run and definition.
+func (m WorkflowMetadata) HeaderText() string {
+	runURL := fmt.Sprintf("%s/%s/actions/runs/%s", m.ServerURL, m.Repository, m.RunID)
+	permalink := fmt.Sprintf("%s/%s/blob/%s/%s", m.ServerURL, m.WorkflowRepository, m.WorkflowSHA, m.WorkflowFilePath)
+	return fmt.Sprintf("This report was generated automatically by [workflow run](%s) (defined at [%s](%s)).",
+		runURL, m.WorkflowRepository, permalink)
+}
+
 // Report holds the formatted output and diff metadata.
 type Report struct {
 	CommentMarkdown string
@@ -35,12 +63,21 @@ type Report struct {
 }
 
 // Build generates the comment markdown and full diff text from target results.
-func Build(results []TargetResult, maxSize int, headSize int, serverURL string, repo string, runID string) Report {
+func Build(results []TargetResult, maxSize int, headSize int, meta WorkflowMetadata, isCI bool) (Report, error) {
 	if maxSize <= 0 {
 		maxSize = DefaultMaxSize
 	}
 	if headSize <= 0 {
 		headSize = DefaultHeadSize
+	}
+
+	var headerText string
+	if meta.IsComplete() {
+		headerText = meta.HeaderText()
+	} else if isCI {
+		return Report{}, fmt.Errorf("missing required workflow metadata in CI environment: %+v", meta)
+	} else {
+		headerText = "This report was generated automatically."
 	}
 
 	var fullDiffBuilder strings.Builder
@@ -65,7 +102,7 @@ func Build(results []TargetResult, maxSize int, headSize int, serverURL string, 
 			FullDiffText:    "",
 			HasDiff:         false,
 			IsTruncated:     false,
-		}
+		}, nil
 	}
 
 	isTruncated := len(fullDiff) > maxSize
@@ -73,12 +110,15 @@ func Build(results []TargetResult, maxSize int, headSize int, serverURL string, 
 	var md strings.Builder
 	md.WriteString("### ❄️ Nix Store Diff (flake.lock update)\n")
 	md.WriteString(Marker + "\n\n")
+	if headerText != "" {
+		md.WriteString(headerText + "\n\n")
+	}
 
 	if isTruncated {
-		artifactURL := fmt.Sprintf("%s/%s/actions/runs/%s#artifacts", serverURL, repo, runID)
+		artifactURL := fmt.Sprintf("%s/%s/actions/runs/%s#artifacts", meta.ServerURL, meta.Repository, meta.RunID)
 		md.WriteString("> [!NOTE]\n")
 		md.WriteString(fmt.Sprintf("> The diff output is large (%d bytes) and has been truncated to fit GitHub comment size limits.\n", len(fullDiff)))
-		if serverURL != "" && repo != "" && runID != "" {
+		if meta.ServerURL != "" && meta.Repository != "" && meta.RunID != "" {
 			md.WriteString(fmt.Sprintf("> You can view the full diff in the [Job Artifacts](%s).\n", artifactURL))
 		} else {
 			md.WriteString("> You can view the full diff in the Job Artifacts.\n")
@@ -125,7 +165,7 @@ func Build(results []TargetResult, maxSize int, headSize int, serverURL string, 
 		FullDiffText:    fullDiff,
 		HasDiff:         true,
 		IsTruncated:     isTruncated,
-	}
+	}, nil
 }
 
 // TruncateUTF8Safe cuts text safely at rune boundaries and prefers line boundaries.

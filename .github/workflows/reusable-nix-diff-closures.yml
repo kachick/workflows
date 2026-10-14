@@ -64,6 +64,7 @@ jobs:
           HEAD_SIZE: ${{ inputs.head-size }}
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
           WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
         run: |
           set -euo pipefail
 
