@@ -145,7 +145,7 @@ func execute(ctx context.Context, cfg *Config) error {
 			if err := runCmd(ctx, env, "git", "add", "-A"); err != nil {
 				return fmt.Errorf("failed to stage post-command changes: %w", err)
 			}
-			if err := runCmd(ctx, env, "git", "commit", "-m", title); err != nil {
+			if err := runCmd(ctx, env, "git", "commit", "--no-gpg-sign", "-m", title); err != nil {
 				return fmt.Errorf("failed to commit post-command changes: %w", err)
 			}
 		}
