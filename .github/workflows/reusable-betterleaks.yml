@@ -1,0 +1,57 @@
+name: '[Reusable] Scan Secrets with betterleaks'
+
+on:
+  workflow_call:
+    inputs:
+      betterleaks-version:
+        description: 'betterleaks CLI version (without v prefix)'
+        required: false
+        type: string
+        default: '1.9.0'
+      runs-on:
+        description: 'Runner image'
+        required: false
+        type: string
+        default: 'ubuntu-slim'
+
+permissions:
+  contents: read
+
+jobs:
+  betterleaks:
+    name: betterleaks
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 15
+    steps:
+      - name: Download
+        working-directory: ${{ runner.temp }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLI_VERSION: ${{ inputs.betterleaks-version }}
+        # Prefer the gh command over curl to avoid hitting GitHub API rate limits
+        run: |
+          gh release download "v${CLI_VERSION}" --skip-existing --repo betterleaks/betterleaks --pattern '*_linux_x64.*' --pattern 'checksums.txt'
+          sha256sum --check --ignore-missing checksums.txt
+
+      - name: Install
+        working-directory: ${{ runner.temp }}
+        env:
+          CLI_VERSION: ${{ inputs.betterleaks-version }}
+        run: |
+          tar zxvf "betterleaks_${CLI_VERSION}_linux_x64.tar.gz"
+          mkdir --parents "${RUNNER_TEMP}/betterleaks/bin"
+          mv betterleaks "${RUNNER_TEMP}/betterleaks/bin"
+          echo "${RUNNER_TEMP}/betterleaks/bin" >> "${GITHUB_PATH}"
+
+      - name: Make sure installed betterleaks version
+        run: 'betterleaks version'
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # Getting all refs for git mode
+          persist-credentials: false
+
+      - name: Run
+        # For CI use in public repositories, ensuring full-redact does not ensure to avoid actual problems, should not forget it :)
+        run: |
+          betterleaks git . --redact=100
