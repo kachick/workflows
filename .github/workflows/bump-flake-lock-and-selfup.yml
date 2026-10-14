@@ -1,13 +1,13 @@
 name: 🤖🆙❄️
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 on:
   pull_request:
     paths:
       - '.github/workflows/bump-flake-lock-and-selfup.yml'
+      - '.github/workflows/reusable-bump-flake-lock.yml'
   schedule:
     # Every 10:17(JST) on Monday
     # https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule
@@ -17,12 +17,12 @@ on:
 
 jobs:
   bump:
-    uses: kachick/selfup/.github/workflows/reusable-bump-flake-lock-and-selfup.yml@06a37ddb70ce25ec28b75ce500e15e7fb4d7c4a9 # v1.3.1
+    uses: $/.github/workflows/reusable-bump-flake-lock.yml
     with:
-      app_id: ${{ vars.APP_ID }}
+      runs-on: ubuntu-26.04
+      app-id: ${{ vars.APP_ID }}
       dry-run: ${{ github.event_name == 'pull_request' }}
-      pr-title: 'Bump flake.lock and related dependencies'
-      optional-run: |
-        echo 'Add other changes and git commit here, especially for .node-version/.ruby-version'
+      post-commit-lock-file: nix develop --command task selfup
+      post-commit-lock-file-title: 'Sync CI dependencies with nixpkgs'
     secrets:
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}

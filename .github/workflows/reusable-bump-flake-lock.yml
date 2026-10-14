@@ -1,0 +1,136 @@
+name: '[Reusable] Bump flake.lock'
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: 'Runner image (e.g. ubuntu-26.04)'
+        required: true
+        type: string
+      app-id:
+        description: 'GitHub App ID or Client ID'
+        required: true
+        type: string
+      post-commit-lock-file:
+        description: 'Command to run after updating flake.lock (e.g. nix run .#update-deps)'
+        required: false
+        type: string
+        default: ''
+      post-commit-lock-file-title:
+        description: 'Commit message for changes from post-commit-lock-file (defaults to the executed command)'
+        required: false
+        type: string
+        default: ''
+      pr-title:
+        description: 'Title for the pull request'
+        required: false
+        type: string
+        default: 'Bump flake.lock and related dependencies'
+      pr-body:
+        description: 'Body for the pull request'
+        required: false
+        type: string
+        default: 'This PR was generated automatically.'
+      branch-name:
+        description: 'Branch name to push the changes to'
+        required: false
+        type: string
+        default: 'bot-update-flake-lock'
+      dry-run:
+        description: 'Skip git push and PR creation when true'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      APP_PRIVATE_KEY:
+        description: 'GitHub App private key'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    env:
+      PR_BRANCH: ${{ inputs.branch-name }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      DRY_RUN: ${{ inputs.dry-run }}
+      POST_COMMAND: ${{ inputs.post-commit-lock-file }}
+      POST_COMMIT_TITLE: ${{ inputs.post-commit-lock-file-title }}
+      PR_TITLE: ${{ inputs.pr-title }}
+      PR_BODY: ${{ inputs.pr-body }}
+    steps:
+      - name: Generate GitHub Apps token
+        id: publish-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.publish-token.outputs.token }}
+          # This workflow depends on stored credentials for the subsequent git push command
+          persist-credentials: true
+
+      - uses: NixOS/nix-installer-action@62c1943b776c509394b550f3f983adc14e9212d6 # v1.0.0
+        with:
+          # access-tokens: Prevent GitHub API rate limiting during `nix run github:`
+          extra-conf: |
+            access-tokens = github.com=${{ github.token }}
+
+      - name: Prepare Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "${PR_BRANCH}"
+
+      - name: Update flake.lock and commit
+        run: nix flake update --commit-lock-file
+
+      - name: Run post-commit-lock-file command and commit
+        if: inputs.post-commit-lock-file != ''
+        run: |
+          eval "${POST_COMMAND}"
+          if [ -n "$(git status --porcelain)" ]; then
+            COMMIT_TITLE="${POST_COMMIT_TITLE:-${POST_COMMAND}}"
+            git add -A
+            git commit -m "${COMMIT_TITLE}"
+          fi
+
+      - name: Push branch and create PR
+        env:
+          GITHUB_TOKEN: ${{ steps.publish-token.outputs.token }}
+        run: |
+          if [ -z "${DEFAULT_BRANCH}" ]; then
+            DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@' || true)"
+            DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+          fi
+
+          count="$(git rev-list --count "origin/${DEFAULT_BRANCH}..")"
+          if [ "$count" -gt 0 ]; then
+            echo "Found ${count} commit(s)."
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "Dry run enabled. Skipping push and PR creation."
+              exit 0
+            fi
+
+            echo "Pushing to ${PR_BRANCH}..."
+            git push origin "${PR_BRANCH}" --force
+
+            if ! gh pr view "${PR_BRANCH}" --json state --jq .state 2>/dev/null | grep -q "OPEN"; then
+              gh pr create \
+                --base "${DEFAULT_BRANCH}" \
+                --head "${PR_BRANCH}" \
+                --title "${PR_TITLE}" \
+                --body "${PR_BODY}"
+            fi
+          else
+            echo "No commits added. Nothing to push or create."
+          fi
