@@ -4,17 +4,16 @@
 }:
 
 buildGo127Module (finalAttrs: {
-  pname = "nix-diff-closures-action";
+  pname = "nix-diff-closures";
   version = "0.1.0";
 
   __structuredAttrs = true;
 
   src = lib.fileset.toSource {
-    root = ./.;
+    root = ../../.;
     fileset = lib.fileset.unions [
-      ./go.mod
-      ./main.go
-      ./internal
+      ../../go.mod
+      ./.
     ];
   };
 
@@ -22,10 +21,12 @@ buildGo127Module (finalAttrs: {
 
   env.CGO_ENABLED = "0";
 
+  passthru.shared-gomod = true;
+
   meta = {
-    mainProgram = "nix-diff-closures-action";
-    description = "GitHub Action to diff closures of Nix derivations";
-    homepage = "https://github.com/kachick/nix-diff-closures-action";
+    mainProgram = "nix-diff-closures";
+    description = "CLI tool to diff closures of Nix derivations";
+    homepage = "https://github.com/kachick/workflows";
     license = lib.licenses.mit;
   };
 })

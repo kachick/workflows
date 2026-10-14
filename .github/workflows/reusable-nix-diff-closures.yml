@@ -73,7 +73,7 @@ jobs:
             FLAKE_REF="."
           fi
 
-          nix run "${FLAKE_REF}" -- \
+          nix run "${FLAKE_REF}#nix-diff-closures" -- \
             --base-rev="${BASE_SHA}" \
             --targets="${TARGETS}" \
             --post-comment="${POST_COMMENT}" \

@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/kachick/nix-diff-closures-action/internal/report"
+	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/report"
 )
 
 // CommandExecutor abstracts command execution for testability.

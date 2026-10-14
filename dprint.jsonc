@@ -27,7 +27,7 @@
   },
   "gofumpt": {
     "langVersion": "go1.27",
-    "modulePath": "github.com/kachick/nix-diff-closures-action"
+    "modulePath": "github.com/kachick/workflows"
   },
   "plugins": [
     "npm:@dprint/json@0.25.2",

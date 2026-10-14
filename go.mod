@@ -1,3 +1,3 @@
-module github.com/kachick/nix-diff-closures-action
+module github.com/kachick/workflows
 
 go 1.27.0

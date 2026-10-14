@@ -28,9 +28,8 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
         in
-        rec {
-          nix-diff-closures-action = pkgs.callPackage ./package.nix { };
-          default = nix-diff-closures-action;
+        {
+          nix-diff-closures = pkgs.callPackage ./pkgs/nix-diff-closures/package.nix { };
         }
       );
 

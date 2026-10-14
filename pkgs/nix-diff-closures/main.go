@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kachick/nix-diff-closures-action/internal/diff"
-	"github.com/kachick/nix-diff-closures-action/internal/gh"
-	"github.com/kachick/nix-diff-closures-action/internal/report"
+	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/diff"
+	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/gh"
+	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/report"
 )
 
 func main() {

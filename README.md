@@ -1,48 +1,29 @@
-# nix-diff-closures-action
+# workflows
 
-Post Nix closure differences on pull requests when `flake.lock` changes.
+Personal collection of reusable GitHub Actions workflows.
 
 > [!NOTE]
 > This repository is built for personal use cases.
-> It is not intended to be a general-purpose action with wide options.
+> It is not intended to be a general-purpose workflow suite with wide options.
 
-## Features and Non-Obvious Requirements
+## Design and Common Rules
 
-- **Multiple targets in a single run**:
-  Supports checking multiple targets (such as `devShells`, `packages`, `nixosConfigurations`, and `homeConfigurations`) at once and groups them into one clean pull request comment.
-- **Minimal dependencies**:
-  Uses only the official `nix store diff-closures` command from Nix. Does not require external diff tools (such as `nvd` or `nix-diff`).
-- **Safe comment limit fallback**:
-  When a diff becomes very large (for example, after upgrading a stable Nixpkgs channel), the comment is safely shortened with a link to job artifacts. This avoids GitHub API size limits.
-- **UTF-8 safe text handling**:
-  Handles non-ASCII characters from Nix diffs (such as `∅`, `→`, and `ε`) safely without cutting multi-byte runes, avoiding broken characters in comments.
-- **Auto-minimize older comments**:
-  Minimizes previous diff comments as `OUTDATED` when new commits are pushed, keeping pull request discussions clean without duplicate noise.
-- **Reusable workflow**:
-  Provided as a reusable workflow (`workflow_call`) so other repositories can use it with only a few lines of configuration.
-- **Logic inside a dedicated CLI**:
-  Keeps shell scripts minimal and puts core logic (diffing, truncation, and GitHub API operations) into a Go CLI to make local testing easy.
+- **Reusable workflows (`workflow_call`)**:
+  Shared jobs that caller repositories can invoke with minimal configuration.
+- **Track `@main` branch**:
+  Caller workflows specify `@main` to receive updates without tagging or manual release steps.
+- **Powered by Nix**:
+  Back-end CLI tools run directly via `nix run github:kachick/workflows#<target>` on Nix-enabled runners.
+- **Runner**:
+  Optimized for modern Ubuntu runners (such as `ubuntu-26.04`).
 
-## Usage
+## Available Workflows
 
-```yaml
-name: ❄️ Diff
-on:
-  pull_request:
-    paths:
-      - 'flake.lock'
+| Name             | Reusable Workflow                                                                                      | Description                                                                     | Details                                    |
+| :--------------- | :----------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------ | :----------------------------------------- |
+| Nix Closure Diff | [`.github/workflows/reusable-nix-diff-closures.yml`](.github/workflows/reusable-nix-diff-closures.yml) | Post Nix package closure differences on pull requests when `flake.lock` changes | [README](pkgs/nix-diff-closures/README.md) |
 
-permissions:
-  contents: read
-  pull-requests: write
+## Repository Layout
 
-jobs:
-  diff:
-    uses: kachick/nix-diff-closures-action/.github/workflows/reusable-diff.yml@main
-    with:
-      runs-on: ubuntu-26.04
-      targets: |
-        devShells.x86_64-linux.default
-        nixosConfigurations.desktop.config.system.build.toplevel
-        homeConfigurations.kachick.activationPackage
-```
+- `.github/workflows/`: Reusable workflows (`workflow_call`) and repository CI
+- `pkgs/`: Dedicated CLI tools and documentation for each workflow

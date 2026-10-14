@@ -4,7 +4,7 @@ on:
     paths:
       - 'flake.lock'
       - '.github/workflows/nix-diff.yml'
-      - '.github/workflows/reusable-diff.yml'
+      - '.github/workflows/reusable-nix-diff-closures.yml'
 
 permissions:
   contents: read
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   diff:
-    uses: $/.github/workflows/reusable-diff.yml
+    uses: $/.github/workflows/reusable-nix-diff-closures.yml
     with:
       runs-on: ubuntu-26.04
       targets: devShells.x86_64-linux.default
