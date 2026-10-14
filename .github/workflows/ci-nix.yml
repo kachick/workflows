@@ -11,6 +11,7 @@ on:
       - 'Taskfile.yml'
       - 'go.*'
       - '**.go'
+      - '**.bash'
   pull_request:
     paths:
       - '.github/workflows/ci-nix.yml'
@@ -20,6 +21,7 @@ on:
       - 'Taskfile.yml'
       - 'go.*'
       - '**.go'
+      - '**.bash'
   schedule:
     # Every 10:42 JST
     # https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule

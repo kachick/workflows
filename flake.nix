@@ -61,6 +61,7 @@
 
                 dprint
                 typos
+                shellcheck
                 zizmor
               ]
             );
