@@ -209,6 +209,13 @@ func execute(ctx context.Context, cfg *Config) error {
 			if err := runCmd(ctx, env, "git", "add", "-A"); err != nil {
 				return fmt.Errorf("failed to stage post-command changes: %w", err)
 			}
+			stagedDiff, err := runCmdOutput(ctx, env, "git", "diff", "--cached")
+			if err != nil {
+				return fmt.Errorf("failed to get staged diff for post-command changes: %w", err)
+			}
+			if err := checker.Check(ctx, stagedDiff); err != nil {
+				return fmt.Errorf("pre-flight leak check failed for post-command staged diff: %w", err)
+			}
 			if err := runCmd(ctx, env, "git", "commit", "--no-gpg-sign", "-m", title); err != nil {
 				return fmt.Errorf("failed to commit post-command changes: %w", err)
 			}
@@ -241,8 +248,13 @@ func execute(ctx context.Context, cfg *Config) error {
 		return nil
 	}
 
+	outgoingDiff, err := runCmdOutput(ctx, env, "git", "diff", fmt.Sprintf("origin/%s..", defaultBranch))
+	if err != nil {
+		return fmt.Errorf("failed to get outgoing diff: %w", err)
+	}
+
 	checker := &leakcheck.BetterleaksChecker{}
-	if err := leakcheck.CheckMultiple(ctx, checker, cfg.PRTitle, body); err != nil {
+	if err := leakcheck.CheckMultiple(ctx, checker, cfg.PRTitle, body, outgoingDiff); err != nil {
 		return fmt.Errorf("pre-flight leak check failed for pull request payload: %w", err)
 	}
 
