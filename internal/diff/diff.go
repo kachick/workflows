@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"strings"
 
@@ -89,7 +90,9 @@ func (e *Engine) diffTarget(ctx context.Context, baseRev string, target string) 
 		}
 	}
 
-	baseInstallable := fmt.Sprintf("git+file://%s?rev=%s#%s", e.RepoDir, baseRev, target)
+	// Escape baseRev to avoid breaking URL query or fragment syntax if unexpected characters are passed.
+	// NOTE: Avoid invoking `git rev-parse` here to keep the CLI simple and fast without extra subprocess calls.
+	baseInstallable := fmt.Sprintf("git+file://%s?rev=%s#%s", e.RepoDir, url.QueryEscape(baseRev), target)
 	baseDrv, err := e.Exec.Run(ctx, "nix", "path-info", "--derivation", baseInstallable)
 	if err != nil {
 		// If base evaluation fails, it might be a newly added target or removed attribute in base

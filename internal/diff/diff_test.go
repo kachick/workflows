@@ -114,4 +114,29 @@ func TestEngineRun(t *testing.T) {
 			t.Fatal("expected NoChange = false")
 		}
 	})
+
+	t.Run("escapes special characters in baseRev for URL query", func(t *testing.T) {
+		mockSpecial := &mockExecutor{
+			responses: map[string]string{
+				"nix [path-info --derivation .#devShells.x86_64-linux.default]":                                "/nix/store/111-drv",
+				"nix [path-info --derivation git+file:///repo?rev=topic%23123#devShells.x86_64-linux.default]": "/nix/store/222-drv",
+				"nix [store diff-closures /nix/store/222-drv /nix/store/111-drv]":                              "bash: 5.2 → 5.3\n",
+			},
+		}
+		engineSpecial := &Engine{
+			Exec:    mockSpecial,
+			RepoDir: "/repo",
+		}
+
+		results, err := engineSpecial.Run(context.Background(), "topic#123", "devShells.x86_64-linux.default")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 1 || results[0].Error != "" {
+			t.Fatalf("expected successful result, got %#v", results)
+		}
+		if results[0].BaseDrv != "/nix/store/222-drv" {
+			t.Fatalf("expected BaseDrv = /nix/store/222-drv, got %q (diff: %q)", results[0].BaseDrv, results[0].DiffText)
+		}
+	})
 }
