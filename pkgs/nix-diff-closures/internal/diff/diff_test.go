@@ -139,4 +139,58 @@ func TestEngineRun(t *testing.T) {
 			t.Fatalf("expected BaseDrv = /nix/store/222-drv, got %q (diff: %q)", results[0].BaseDrv, results[0].DiffText)
 		}
 	})
+
+	t.Run("normalizes closure diff text containing ANSI codes", func(t *testing.T) {
+		mockANSI := &mockExecutor{
+			responses: map[string]string{
+				"nix [path-info --derivation .#devShells.x86_64-linux.default]":                             "/nix/store/111-drv",
+				"nix [path-info --derivation git+file:///repo?rev=base-sha#devShells.x86_64-linux.default]": "/nix/store/222-drv",
+				"nix [store diff-closures /nix/store/222-drv /nix/store/111-drv]":                           "pkg: \x1b[31;1m10.0 KiB\x1b[0m\n",
+			},
+		}
+		engineANSI := &Engine{
+			Exec:    mockANSI,
+			RepoDir: "/repo",
+		}
+
+		results, err := engineANSI.Run(context.Background(), "base-sha", "devShells.x86_64-linux.default")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 1 || results[0].Error != "" {
+			t.Fatalf("expected successful result, got %#v", results)
+		}
+		expectedDiff := "pkg: +10.0 KiB\n"
+		if results[0].DiffText != expectedDiff {
+			t.Fatalf("expected DiffText = %q, got %q", expectedDiff, results[0].DiffText)
+		}
+	})
+}
+
+func TestNormalizeDiffOutput(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "plain text without ansi codes remains unchanged",
+			input:    "bash: 5.2 → 5.3\n",
+			expected: "bash: 5.2 → 5.3\n",
+		},
+		{
+			name:     "strips ansi codes and normalizes positive size with plus sign",
+			input:    "n4hz2f0rhvclfbgk4adkbxi6y8sd31cf: ε → ∅, \x1b[32;1m-199.8 MiB\x1b[0m\nrfcpg2ryywgma7wlswjzna99g9gq8laq: ∅ → ε, \x1b[31;1m199.8 MiB\x1b[0m\n",
+			expected: "n4hz2f0rhvclfbgk4adkbxi6y8sd31cf: ε → ∅, -199.8 MiB\nrfcpg2ryywgma7wlswjzna99g9gq8laq: ∅ → ε, +199.8 MiB\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeDiffOutput(tt.input)
+			if got != tt.expected {
+				t.Fatalf("expected %q, got %q", tt.expected, got)
+			}
+		})
+	}
 }

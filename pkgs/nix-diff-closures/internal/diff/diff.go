@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/report"
@@ -122,6 +123,8 @@ func (e *Engine) diffTarget(ctx context.Context, baseRev string, target string) 
 		}
 	}
 
+	diffOut = normalizeDiffOutput(diffOut)
+
 	if strings.TrimSpace(diffOut) == "" {
 		return report.TargetResult{
 			Target:   target,
@@ -137,4 +140,25 @@ func (e *Engine) diffTarget(ctx context.Context, baseRev string, target string) 
 		HeadDrv:  headDrv,
 		DiffText: diffOut,
 	}
+}
+
+var (
+	// reRedPositiveSize matches ANSI_RED before digits, which indicates positive size changes.
+	reRedPositiveSize = regexp.MustCompile(`\x1b\[31;1m([0-9])`)
+	// reANSI matches ANSI escape sequences like color codes.
+	reANSI = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+)
+
+// normalizeDiffOutput strips ANSI escape codes and adds '+' to positive sizes.
+//
+// Why not pass NO_COLOR=1 to nix?
+// Nix's diff-closures prints ANSI color codes to stdout directly, and ignores NO_COLOR.
+//
+// Why not just strip ANSI codes?
+// Nix marks positive size changes with red color instead of a plus sign.
+// Because GitHub markdown code blocks cannot show colors, this adds '+'
+// to red positive sizes, and then strips all ANSI escape codes.
+func normalizeDiffOutput(s string) string {
+	s = reRedPositiveSize.ReplaceAllString(s, "+$1")
+	return reANSI.ReplaceAllString(s, "")
 }
