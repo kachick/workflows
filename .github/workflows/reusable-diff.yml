@@ -3,6 +3,10 @@ name: '[Reusable] Nix Closure Diff'
 on:
   workflow_call:
     inputs:
+      runs-on:
+        description: 'Runner image (e.g. ubuntu-26.04)'
+        required: true
+        type: string
       base-sha:
         description: 'Base commit SHA (defaults to PR base SHA)'
         required: false
@@ -34,7 +38,7 @@ permissions:
 
 jobs:
   diff:
-    runs-on: ubuntu-26.04
+    runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

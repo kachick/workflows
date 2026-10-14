@@ -40,6 +40,7 @@ jobs:
   diff:
     uses: kachick/nix-diff-closures-action/.github/workflows/reusable-diff.yml@main
     with:
+      runs-on: ubuntu-26.04
       targets: |
         devShells.x86_64-linux.default
         nixosConfigurations.desktop.config.system.build.toplevel
