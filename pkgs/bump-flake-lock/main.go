@@ -79,16 +79,31 @@ func parseConfig(args []string) (*Config, error) {
 	return cfg, nil
 }
 
-func runCmd(ctx context.Context, name string, args ...string) error {
+func gitEnv(cfg *Config) []string {
+	return append(os.Environ(),
+		"GIT_AUTHOR_NAME="+cfg.GitUserName,
+		"GIT_AUTHOR_EMAIL="+cfg.GitUserEmail,
+		"GIT_COMMITTER_NAME="+cfg.GitUserName,
+		"GIT_COMMITTER_EMAIL="+cfg.GitUserEmail,
+	)
+}
+
+func runCmd(ctx context.Context, env []string, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
+	if len(env) > 0 {
+		cmd.Env = env
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 	return cmd.Run()
 }
 
-func runCmdOutput(ctx context.Context, name string, args ...string) (string, error) {
+func runCmdOutput(ctx context.Context, env []string, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	if len(env) > 0 {
+		cmd.Env = env
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -99,29 +114,26 @@ func runCmdOutput(ctx context.Context, name string, args ...string) (string, err
 }
 
 func execute(ctx context.Context, cfg *Config) error {
-	if err := runCmd(ctx, "git", "config", "user.name", cfg.GitUserName); err != nil {
-		return fmt.Errorf("failed to set git user.name: %w", err)
-	}
-	if err := runCmd(ctx, "git", "config", "user.email", cfg.GitUserEmail); err != nil {
-		return fmt.Errorf("failed to set git user.email: %w", err)
-	}
-	if err := runCmd(ctx, "git", "switch", "-C", cfg.BranchName); err != nil {
+	env := gitEnv(cfg)
+
+	if err := runCmd(ctx, env, "git", "switch", "-C", cfg.BranchName); err != nil {
 		return fmt.Errorf("failed to switch branch to %s: %w", cfg.BranchName, err)
 	}
 
-	if err := runCmd(ctx, "nix", "flake", "update", "--commit-lock-file"); err != nil {
+	if err := runCmd(ctx, env, "nix", "flake", "update", "--commit-lock-file"); err != nil {
 		return fmt.Errorf("failed to update flake.lock: %w", err)
 	}
 
 	if cfg.PostCommand != "" {
 		cmd := exec.CommandContext(ctx, "sh", "-c", cfg.PostCommand)
+		cmd.Env = env
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to run post-command: %w", err)
 		}
 
-		status, err := runCmdOutput(ctx, "git", "status", "--porcelain")
+		status, err := runCmdOutput(ctx, env, "git", "status", "--porcelain")
 		if err != nil {
 			return fmt.Errorf("failed to check git status: %w", err)
 		}
@@ -130,23 +142,23 @@ func execute(ctx context.Context, cfg *Config) error {
 			if title == "" {
 				title = cfg.PostCommand
 			}
-			if err := runCmd(ctx, "git", "add", "-A"); err != nil {
+			if err := runCmd(ctx, env, "git", "add", "-A"); err != nil {
 				return fmt.Errorf("failed to stage post-command changes: %w", err)
 			}
-			if err := runCmd(ctx, "git", "commit", "-m", title); err != nil {
+			if err := runCmd(ctx, env, "git", "commit", "-m", title); err != nil {
 				return fmt.Errorf("failed to commit post-command changes: %w", err)
 			}
 		}
 	}
 
-	defaultBranch, err := runCmdOutput(ctx, "git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	defaultBranch, err := runCmdOutput(ctx, env, "git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
 	if err != nil || defaultBranch == "" {
 		defaultBranch = "main"
 	} else {
 		defaultBranch = strings.TrimPrefix(defaultBranch, "origin/")
 	}
 
-	countStr, err := runCmdOutput(ctx, "git", "rev-list", "--count", fmt.Sprintf("origin/%s..", defaultBranch))
+	countStr, err := runCmdOutput(ctx, env, "git", "rev-list", "--count", fmt.Sprintf("origin/%s..", defaultBranch))
 	if err != nil {
 		return fmt.Errorf("failed to count commits ahead of origin/%s: %w", defaultBranch, err)
 	}
@@ -167,11 +179,11 @@ func execute(ctx context.Context, cfg *Config) error {
 	}
 
 	fmt.Printf("Pushing to %s...\n", cfg.BranchName)
-	if err := runCmd(ctx, "git", "push", "origin", cfg.BranchName, "--force"); err != nil {
+	if err := runCmd(ctx, env, "git", "push", "origin", cfg.BranchName, "--force"); err != nil {
 		return fmt.Errorf("failed to push to %s: %w", cfg.BranchName, err)
 	}
 
-	prState, _ := runCmdOutput(ctx, "gh", "pr", "view", cfg.BranchName, "--json", "state", "--jq", ".state")
+	prState, _ := runCmdOutput(ctx, env, "gh", "pr", "view", cfg.BranchName, "--json", "state", "--jq", ".state")
 	if strings.TrimSpace(prState) != "OPEN" {
 		createArgs := []string{
 			"pr", "create",
@@ -180,7 +192,7 @@ func execute(ctx context.Context, cfg *Config) error {
 			"--title", cfg.PRTitle,
 			"--body", cfg.PRBody,
 		}
-		if err := runCmd(ctx, "gh", createArgs...); err != nil {
+		if err := runCmd(ctx, env, "gh", createArgs...); err != nil {
 			return fmt.Errorf("failed to create PR: %w", err)
 		}
 	}
