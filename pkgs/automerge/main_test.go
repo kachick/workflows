@@ -104,9 +104,13 @@ func TestIsDisallowedDependabotMajor(t *testing.T) {
 		{title: "Bump actions/checkout from v4.0.0 to v4.0.1", disallowed: false},
 		{title: "Bump actions/checkout from 3.0.0 to 4.0.0", disallowed: true},
 		{title: "Bump actions/checkout from v3.0.0 to v4.0.0", disallowed: true},
+		{title: "Bump actions/checkout from 4.0.0 to 4.1.0 in /.github/workflows", disallowed: false},
+		{title: "Bump actions/checkout from 3.0.0 to 4.0.0 in /.github/workflows", disallowed: true},
 		{title: "Bump cachix/cachix-action from 14 to 15", disallowed: false},
 		{title: "Bump cachix/install-nix-action from v26 to v27", disallowed: false},
-		{title: "Update dependencies", disallowed: false},
+		{title: "Bump the rust group with 2 updates", disallowed: true},
+		{title: "Bump the dev-dependencies group in /sub/dir with 3 updates", disallowed: true},
+		{title: "Update dependencies", disallowed: true},
 	}
 
 	for _, tc := range tests {
@@ -182,13 +186,40 @@ func TestIsEligible(t *testing.T) {
 		t.Errorf("PR with failed checks should not be eligible")
 	}
 
-	// Skipped checks (strict policy: only SUCCESS is allowed)
+	// Skipped checks (eligible)
 	skippedPR := basePR
 	skippedPR.StatusCheckRollup = []StatusCheckItem{
 		{Status: "COMPLETED", Conclusion: "SKIPPED"},
 	}
-	if isEligible(skippedPR, defaultAllowedBots) {
-		t.Errorf("PR with skipped checks should not be eligible under strict policy")
+	if !isEligible(skippedPR, defaultAllowedBots) {
+		t.Errorf("PR with skipped checks should be eligible")
+	}
+
+	// Neutral checks (eligible)
+	neutralPR := basePR
+	neutralPR.StatusCheckRollup = []StatusCheckItem{
+		{Status: "COMPLETED", Conclusion: "NEUTRAL"},
+	}
+	if !isEligible(neutralPR, defaultAllowedBots) {
+		t.Errorf("PR with neutral checks should be eligible")
+	}
+
+	// Timed out checks
+	timedOutPR := basePR
+	timedOutPR.StatusCheckRollup = []StatusCheckItem{
+		{Status: "COMPLETED", Conclusion: "TIMED_OUT"},
+	}
+	if isEligible(timedOutPR, defaultAllowedBots) {
+		t.Errorf("PR with timed out checks should not be eligible")
+	}
+
+	// Cancelled checks
+	cancelledPR := basePR
+	cancelledPR.StatusCheckRollup = []StatusCheckItem{
+		{Status: "COMPLETED", Conclusion: "CANCELLED"},
+	}
+	if isEligible(cancelledPR, defaultAllowedBots) {
+		t.Errorf("PR with cancelled checks should not be eligible")
 	}
 
 	// Dependabot major bump (disallowed)
@@ -205,6 +236,30 @@ func TestIsEligible(t *testing.T) {
 	dependabotMinorPR.Title = "Bump actions/checkout from 4.0.0 to 4.1.0"
 	if !isEligible(dependabotMinorPR, defaultAllowedBots) {
 		t.Errorf("Dependabot minor bump should be eligible")
+	}
+
+	// Dependabot subdirectory minor bump (eligible)
+	dependabotSubdirMinorPR := basePR
+	dependabotSubdirMinorPR.Author.Login = "dependabot[bot]"
+	dependabotSubdirMinorPR.Title = "Bump actions/checkout from 4.0.0 to 4.1.0 in /.github/workflows"
+	if !isEligible(dependabotSubdirMinorPR, defaultAllowedBots) {
+		t.Errorf("Dependabot subdirectory minor bump should be eligible")
+	}
+
+	// Dependabot subdirectory major bump (disallowed)
+	dependabotSubdirMajorPR := basePR
+	dependabotSubdirMajorPR.Author.Login = "dependabot[bot]"
+	dependabotSubdirMajorPR.Title = "Bump actions/checkout from 3.0.0 to 4.0.0 in /.github/workflows"
+	if isEligible(dependabotSubdirMajorPR, defaultAllowedBots) {
+		t.Errorf("Dependabot subdirectory major bump should not be eligible")
+	}
+
+	// Dependabot group update (disallowed)
+	dependabotGroupPR := basePR
+	dependabotGroupPR.Author.Login = "dependabot[bot]"
+	dependabotGroupPR.Title = "Bump the rust group with 2 updates"
+	if isEligible(dependabotGroupPR, defaultAllowedBots) {
+		t.Errorf("Dependabot group update should not be eligible")
 	}
 
 	// Dependabot cachix major bump (eligible)

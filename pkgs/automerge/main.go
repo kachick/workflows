@@ -22,7 +22,7 @@ var defaultAllowedBots = []string{
 	"samuebot[bot]",
 }
 
-var dependabotBumpRegex = regexp.MustCompile(`^Bump (?P<pkg>.+) from (?P<old>[^ ]+) to (?P<new>[^ ]+)$`)
+var dependabotBumpRegex = regexp.MustCompile(`^Bump (?P<pkg>.+) from (?P<old>[^ ]+) to (?P<new>[^ ]+)(?: in .+)?$`)
 
 type PullRequest struct {
 	Number            int               `json:"number"`
@@ -150,7 +150,8 @@ func extractMajor(v string) string {
 func isDisallowedDependabotMajor(title string) bool {
 	matches := dependabotBumpRegex.FindStringSubmatch(title)
 	if matches == nil {
-		return false
+		// Disallow group updates and unrecognized titles because their versions cannot be checked from the title.
+		return true
 	}
 
 	pkgIndex := dependabotBumpRegex.SubexpIndex("pkg")
@@ -192,9 +193,12 @@ func isEligible(pr PullRequest, allowedBots []string) bool {
 		return false
 	}
 
-	// Strictly require SUCCESS conclusion for all checks (no SKIPPED or NEUTRAL)
+	// Accept SUCCESS, SKIPPED, and NEUTRAL check conclusions once completed.
 	for _, check := range pr.StatusCheckRollup {
-		if check.Status != "COMPLETED" || check.Conclusion != "SUCCESS" {
+		if check.Status != "COMPLETED" {
+			return false
+		}
+		if check.Conclusion != "SUCCESS" && check.Conclusion != "SKIPPED" && check.Conclusion != "NEUTRAL" {
 			return false
 		}
 	}
