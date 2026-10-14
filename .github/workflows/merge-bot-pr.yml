@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - name: Wait for other jobs
-        uses: kachick/wait-other-jobs@v4
+        uses: kachick/wait-other-jobs@59f25684252050d78317758cbfea7a5f261960cd # v4.0.0
         with:
           skip-same-workflow: 'true'
         timeout-minutes: 10
@@ -55,7 +55,7 @@ jobs:
     if: ${{ github.event.pull_request.user.login == 'renovate[bot]' }}
     steps:
       - name: Wait for other jobs
-        uses: kachick/wait-other-jobs@v4
+        uses: kachick/wait-other-jobs@59f25684252050d78317758cbfea7a5f261960cd # v4.0.0
         with:
           skip-same-workflow: 'true'
         timeout-minutes: 10
@@ -72,7 +72,7 @@ jobs:
     if: ${{ github.event.pull_request.user.login == 'selfup-runner[bot]' }}
     steps:
       - name: Wait for other jobs
-        uses: kachick/wait-other-jobs@v4
+        uses: kachick/wait-other-jobs@59f25684252050d78317758cbfea7a5f261960cd # v4.0.0
         with:
           skip-same-workflow: 'true'
         timeout-minutes: 20
