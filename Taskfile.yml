@@ -23,6 +23,7 @@ tasks:
       - CGO_ENABLED=0 go vet ./...
       - dprint check
       - typos . .github .vscode
+      - betterleaks git --config .betterleaks.toml
       - git ls-files -z '*.sh' '*.bash' | xargs --null --no-run-if-empty shellcheck
       - zizmor .
       - git ls-files | xargs nix run github:kachick/selfup/v1.3.1 -- list -check
