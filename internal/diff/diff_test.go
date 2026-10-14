@@ -27,39 +27,34 @@ func TestParseTargets(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
-		system   string
 		expected []string
 	}{
 		{
-			name:     "empty input defaults to devShells",
+			name:     "empty input defaults to devShells.x86_64-linux.default",
 			input:    "",
-			system:   "x86_64-linux",
 			expected: []string{"devShells.x86_64-linux.default"},
 		},
 		{
-			name:     "single target with system placeholder",
-			input:    "devShells.${SYSTEM}.default",
-			system:   "aarch64-linux",
-			expected: []string{"devShells.aarch64-linux.default"},
+			name:     "single explicit target",
+			input:    "devShells.x86_64-linux.default",
+			expected: []string{"devShells.x86_64-linux.default"},
 		},
 		{
 			name: "newline separated multiple targets with comments and prefix stripping",
 			input: `
 # dev shell
-.#devShells.${SYSTEM}.default
+.#devShells.x86_64-linux.default
 # nixos config
 nixosConfigurations.desktop.config.system.build.toplevel
 `,
-			system: "x86_64-linux",
 			expected: []string{
 				"devShells.x86_64-linux.default",
 				"nixosConfigurations.desktop.config.system.build.toplevel",
 			},
 		},
 		{
-			name:   "comma separated targets",
-			input:  "packages.${SYSTEM}.default, devShells.${SYSTEM}.ci",
-			system: "x86_64-linux",
+			name:  "comma separated targets",
+			input: "packages.x86_64-linux.default, devShells.x86_64-linux.ci",
 			expected: []string{
 				"packages.x86_64-linux.default",
 				"devShells.x86_64-linux.ci",
@@ -69,7 +64,7 @@ nixosConfigurations.desktop.config.system.build.toplevel
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ParseTargets(tt.input, tt.system)
+			got := ParseTargets(tt.input)
 			if !reflect.DeepEqual(got, tt.expected) {
 				t.Fatalf("expected %#v, got %#v", tt.expected, got)
 			}
@@ -80,7 +75,6 @@ nixosConfigurations.desktop.config.system.build.toplevel
 func TestEngineRun(t *testing.T) {
 	mock := &mockExecutor{
 		responses: map[string]string{
-			"nix [eval --raw --impure --expr builtins.currentSystem]":                                   "x86_64-linux",
 			"nix [path-info --derivation .#devShells.x86_64-linux.default]":                             "/nix/store/111-drv",
 			"nix [path-info --derivation git+file:///repo?rev=base-sha#devShells.x86_64-linux.default]": "/nix/store/222-drv",
 			"nix [store diff-closures /nix/store/222-drv /nix/store/111-drv]":                           "bash: 5.2 → 5.3\n",
@@ -92,7 +86,7 @@ func TestEngineRun(t *testing.T) {
 		RepoDir: "/repo",
 	}
 
-	results, err := engine.Run(context.Background(), "base-sha", "devShells.${SYSTEM}.default")
+	results, err := engine.Run(context.Background(), "base-sha", "devShells.x86_64-linux.default")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

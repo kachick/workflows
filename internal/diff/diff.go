@@ -10,6 +10,9 @@ import (
 	"github.com/kachick/nix-diff-closures-action/internal/report"
 )
 
+// DefaultTarget is the default flake attribute path to diff on linux runners.
+const DefaultTarget = "devShells.x86_64-linux.default"
+
 // CommandExecutor abstracts command execution for testability.
 type CommandExecutor interface {
 	Run(ctx context.Context, name string, args ...string) (string, error)
@@ -36,8 +39,8 @@ func (e *DefaultCommandExecutor) Run(ctx context.Context, name string, args ...s
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// ParseTargets parses comma or newline separated target strings and replaces system placeholder.
-func ParseTargets(input string, system string) []string {
+// ParseTargets parses comma or newline separated flake attribute paths.
+func ParseTargets(input string) []string {
 	var targets []string
 	lines := strings.FieldsFunc(input, func(r rune) bool {
 		return r == '\n' || r == ','
@@ -50,13 +53,11 @@ func ParseTargets(input string, system string) []string {
 		}
 		// Strip leading '.#' if user specified it
 		trimmed = strings.TrimPrefix(trimmed, ".#")
-		// Replace ${SYSTEM} placeholder
-		resolved := strings.ReplaceAll(trimmed, "${SYSTEM}", system)
-		targets = append(targets, resolved)
+		targets = append(targets, trimmed)
 	}
 
 	if len(targets) == 0 {
-		targets = append(targets, fmt.Sprintf("devShells.%s.default", system))
+		targets = append(targets, DefaultTarget)
 	}
 
 	return targets
@@ -68,23 +69,9 @@ type Engine struct {
 	RepoDir string
 }
 
-// CurrentSystem queries Nix for builtins.currentSystem.
-func (e *Engine) CurrentSystem(ctx context.Context) (string, error) {
-	out, err := e.Exec.Run(ctx, "nix", "eval", "--raw", "--impure", "--expr", "builtins.currentSystem")
-	if err != nil {
-		return "", fmt.Errorf("failed to query nix system: %w", err)
-	}
-	return strings.TrimSpace(out), nil
-}
-
 // Run computes closure differences for all targets between baseRev and current HEAD.
 func (e *Engine) Run(ctx context.Context, baseRev string, rawTargets string) ([]report.TargetResult, error) {
-	system, err := e.CurrentSystem(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	targets := ParseTargets(rawTargets, system)
+	targets := ParseTargets(rawTargets)
 	var results []report.TargetResult
 
 	for _, target := range targets {

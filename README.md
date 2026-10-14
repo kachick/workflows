@@ -25,7 +25,7 @@ Post Nix closure differences on pull requests when `flake.lock` changes.
 
 ## Usage
 
-### Simple (defaults to `devShells.${SYSTEM}.default`)
+### Simple (defaults to `devShells.x86_64-linux.default`)
 
 ```yaml
 name: ❄️ Diff
@@ -61,7 +61,7 @@ jobs:
     uses: kachick/nix-diff-closures-action/.github/workflows/reusable-diff.yml@main
     with:
       targets: |
-        devShells.${SYSTEM}.default
+        devShells.x86_64-linux.default
         nixosConfigurations.desktop.config.system.build.toplevel
         homeConfigurations.kachick.activationPackage
 ```

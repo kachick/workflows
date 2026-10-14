@@ -9,7 +9,7 @@ on:
         type: string
         default: ''
       targets:
-        description: 'Newline- or comma-separated list of flake targets (defaults to devShells.${SYSTEM}.default)'
+        description: 'Newline- or comma-separated list of flake targets (defaults to devShells.x86_64-linux.default)'
         required: false
         type: string
         default: ''

@@ -39,7 +39,7 @@ func run() error {
 	)
 
 	flag.StringVar(&baseRev, "base-rev", "", "Base git revision (e.g. PR base SHA)")
-	flag.StringVar(&targets, "targets", "", "Targets to diff (comma or newline separated, e.g. devShells.${SYSTEM}.default)")
+	flag.StringVar(&targets, "targets", "", "Targets to diff (comma or newline separated, e.g. devShells.x86_64-linux.default)")
 	flag.StringVar(&outComment, "output-comment", "comment.md", "Path to save comment markdown")
 	flag.StringVar(&outFullDiff, "output-full-diff", "diff.txt", "Path to save full diff text")
 	flag.IntVar(&maxSize, "max-size", report.DefaultMaxSize, "Maximum bytes before truncating comment")
