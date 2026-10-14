@@ -3,11 +3,10 @@ name: '[Reusable] Scan Secrets with betterleaks'
 on:
   workflow_call:
     inputs:
-      betterleaks-version:
-        description: 'betterleaks CLI version (without v prefix)'
-        required: false
+      nix-store-hash:
+        description: 'Store hash of betterleaks in cache.nixos.org (32 characters Base32)'
+        required: true
         type: string
-        default: '1.9.0'
       runs-on:
         description: 'Runner image'
         required: false
@@ -23,25 +22,124 @@ jobs:
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 15
     steps:
-      - name: Download
+      - name: Download betterleaks from nixpkgs binary cache
         working-directory: ${{ runner.temp }}
         env:
-          GH_TOKEN: ${{ github.token }}
-          CLI_VERSION: ${{ inputs.betterleaks-version }}
-        # Prefer the gh command over curl to avoid hitting GitHub API rate limits
+          STORE_HASH: ${{ inputs.nix-store-hash }}
+        # Fetch the pre-built pure Go binary from cache.nixos.org without installing Nix
         run: |
-          gh release download "v${CLI_VERSION}" --skip-existing --repo betterleaks/betterleaks --pattern '*_linux_x64.*' --pattern 'checksums.txt'
-          sha256sum --check --ignore-missing checksums.txt
+          set -euo pipefail
 
-      - name: Install
+          if ! command -v zstd >/dev/null 2>&1 || ! command -v ruby >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends zstd ruby
+          fi
+
+          echo "Fetching narinfo for store hash ${STORE_HASH}..."
+          NARINFO=$(curl -sSfL "https://cache.nixos.org/${STORE_HASH}.narinfo")
+          NAR_URL=$(echo "${NARINFO}" | awk '/^URL: /{print $2}')
+
+          if [ -z "${NAR_URL}" ]; then
+            echo "Failed to extract NAR URL from narinfo" >&2
+            exit 1
+          fi
+
+          echo "Downloading and decompressing https://cache.nixos.org/${NAR_URL}..."
+          curl -sSfL "https://cache.nixos.org/${NAR_URL}" | zstd -d > "${RUNNER_TEMP}/betterleaks.nar"
+
+      - name: Unpack NAR archive
         working-directory: ${{ runner.temp }}
-        env:
-          CLI_VERSION: ${{ inputs.betterleaks-version }}
         run: |
-          tar zxvf "betterleaks_${CLI_VERSION}_linux_x64.tar.gz"
-          mkdir --parents "${RUNNER_TEMP}/betterleaks/bin"
-          mv betterleaks "${RUNNER_TEMP}/betterleaks/bin"
-          echo "${RUNNER_TEMP}/betterleaks/bin" >> "${GITHUB_PATH}"
+          set -euo pipefail
+
+          cat << 'EOF' > "${RUNNER_TEMP}/unpack_nar.rb"
+          require 'fileutils'
+
+          def read_str(io)
+            len_bytes = io.read(8)
+            return nil unless len_bytes
+            len = len_bytes.unpack1('Q<')
+            str = io.read(len)
+            pad = (8 - (len % 8)) % 8
+            io.read(pad) if pad > 0
+            str
+          end
+
+          def read_contents(io, path)
+            len_bytes = io.read(8)
+            len = len_bytes.unpack1('Q<')
+            File.open(path, 'wb') do |out|
+              remaining = len
+              while remaining > 0
+                chunk = io.read([remaining, 65536].min)
+                out.write(chunk)
+                remaining -= chunk.bytesize
+              end
+            end
+            pad = (8 - (len % 8)) % 8
+            io.read(pad) if pad > 0
+          end
+
+          def unpack_node(io, dest)
+            assert_token(io, '(')
+            assert_token(io, 'type')
+            type = read_str(io)
+            case type
+            when 'directory'
+              FileUtils.mkdir_p(dest)
+              loop do
+                tok = read_str(io)
+                break if tok == ')'
+                raise "Expected entry, got #{tok}" unless tok == 'entry'
+                assert_token(io, '(')
+                assert_token(io, 'name')
+                name = read_str(io)
+                assert_token(io, 'node')
+                unpack_node(io, File.join(dest, name))
+                assert_token(io, ')')
+              end
+            when 'regular'
+              executable = false
+              loop do
+                tok = read_str(io)
+                case tok
+                when 'executable'
+                  read_str(io)
+                  executable = true
+                when 'contents'
+                  read_contents(io, dest)
+                  File.chmod(executable ? 0755 : 0644, dest)
+                  assert_token(io, ')')
+                  break
+                end
+              end
+            when 'symlink'
+              assert_token(io, 'target')
+              target = read_str(io)
+              File.symlink(target, dest)
+              assert_token(io, ')')
+            else
+              raise "Unknown type: #{type}"
+            end
+          end
+
+          def assert_token(io, expected)
+            tok = read_str(io)
+            raise "Expected #{expected}, got #{tok}" unless tok == expected
+          end
+
+          nar_path, dest_dir = ARGV
+          File.open(nar_path, 'rb') do |f|
+            tag = read_str(f)
+            raise "Bad tag: #{tag}" unless tag == 'nix-archive-1'
+            unpack_node(f, dest_dir)
+          end
+          EOF
+
+          DEST_DIR="${RUNNER_TEMP}/betterleaks-extracted"
+          ruby "${RUNNER_TEMP}/unpack_nar.rb" "${RUNNER_TEMP}/betterleaks.nar" "${DEST_DIR}"
+
+          echo "${DEST_DIR}/bin" >> "${GITHUB_PATH}"
 
       - name: Make sure installed betterleaks version
         run: 'betterleaks version'
