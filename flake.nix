@@ -28,13 +28,9 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
         in
-        {
-          default = pkgs.buildGo127Module {
-            pname = "nix-diff-closures-action";
-            version = "0.1.0";
-            src = ./.;
-            vendorHash = null;
-          };
+        rec {
+          nix-diff-closures-action = pkgs.callPackage ./package.nix { };
+          default = nix-diff-closures-action;
         }
       );
 
@@ -45,8 +41,13 @@
         in
         {
           default = pkgs.mkShellNoCC {
-            # Set NIX_PATH for nixd inlay hints
-            env.NIX_PATH = "nixpkgs=${nixpkgs.outPath}";
+            env = {
+              # Set NIX_PATH for nixd inlay hints
+              NIX_PATH = "nixpkgs=${nixpkgs.outPath}";
+
+              # For local development
+              CGO_ENABLED = "0";
+            };
 
             buildInputs = (
               with pkgs;
