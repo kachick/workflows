@@ -25,26 +25,6 @@ Post Nix closure differences on pull requests when `flake.lock` changes.
 
 ## Usage
 
-### Simple (defaults to `devShells.x86_64-linux.default`)
-
-```yaml
-name: ❄️ Diff
-on:
-  pull_request:
-    paths:
-      - 'flake.lock'
-
-permissions:
-  contents: read
-  pull-requests: write
-
-jobs:
-  diff:
-    uses: kachick/nix-diff-closures-action/.github/workflows/reusable-diff.yml@main
-```
-
-### Multiple targets (e.g. for dotfiles)
-
 ```yaml
 name: ❄️ Diff
 on:

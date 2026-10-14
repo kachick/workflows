@@ -79,6 +79,9 @@ func run() error {
 	if baseRev == "" {
 		return errors.New("base-rev is required (or set BASE_SHA)")
 	}
+	if strings.TrimSpace(targets) == "" {
+		return errors.New("targets is required (or set TARGETS)")
+	}
 
 	absRepoDir, err := filepath.Abs(repoDir)
 	if err != nil {

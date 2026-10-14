@@ -13,3 +13,5 @@ permissions:
 jobs:
   diff:
     uses: $/.github/workflows/reusable-diff.yml
+    with:
+      targets: devShells.x86_64-linux.default

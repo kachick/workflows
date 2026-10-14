@@ -3,15 +3,13 @@ package diff
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 
 	"github.com/kachick/nix-diff-closures-action/internal/report"
 )
-
-// DefaultTarget is the default flake attribute path to diff on linux runners.
-const DefaultTarget = "devShells.x86_64-linux.default"
 
 // CommandExecutor abstracts command execution for testability.
 type CommandExecutor interface {
@@ -56,10 +54,6 @@ func ParseTargets(input string) []string {
 		targets = append(targets, trimmed)
 	}
 
-	if len(targets) == 0 {
-		targets = append(targets, DefaultTarget)
-	}
-
 	return targets
 }
 
@@ -72,8 +66,11 @@ type Engine struct {
 // Run computes closure differences for all targets between baseRev and current HEAD.
 func (e *Engine) Run(ctx context.Context, baseRev string, rawTargets string) ([]report.TargetResult, error) {
 	targets := ParseTargets(rawTargets)
-	var results []report.TargetResult
+	if len(targets) == 0 {
+		return nil, errors.New("at least one target must be specified")
+	}
 
+	var results []report.TargetResult
 	for _, target := range targets {
 		res := e.diffTarget(ctx, baseRev, target)
 		results = append(results, res)

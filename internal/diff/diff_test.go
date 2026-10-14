@@ -30,9 +30,9 @@ func TestParseTargets(t *testing.T) {
 		expected []string
 	}{
 		{
-			name:     "empty input defaults to devShells.x86_64-linux.default",
+			name:     "empty input returns empty slice",
 			input:    "",
-			expected: []string{"devShells.x86_64-linux.default"},
+			expected: nil,
 		},
 		{
 			name:     "single explicit target",
@@ -86,23 +86,32 @@ func TestEngineRun(t *testing.T) {
 		RepoDir: "/repo",
 	}
 
-	results, err := engine.Run(context.Background(), "base-sha", "devShells.x86_64-linux.default")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	t.Run("fails when targets is empty", func(t *testing.T) {
+		_, err := engine.Run(context.Background(), "base-sha", "")
+		if err == nil {
+			t.Fatal("expected error when targets is empty")
+		}
+	})
 
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
+	t.Run("succeeds with valid target", func(t *testing.T) {
+		results, err := engine.Run(context.Background(), "base-sha", "devShells.x86_64-linux.default")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-	res := results[0]
-	if res.Target != "devShells.x86_64-linux.default" {
-		t.Fatalf("unexpected target: %s", res.Target)
-	}
-	if res.DiffText != "bash: 5.2 → 5.3\n" {
-		t.Fatalf("unexpected diff text: %q", res.DiffText)
-	}
-	if res.NoChange {
-		t.Fatal("expected NoChange = false")
-	}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(results))
+		}
+
+		res := results[0]
+		if res.Target != "devShells.x86_64-linux.default" {
+			t.Fatalf("unexpected target: %s", res.Target)
+		}
+		if res.DiffText != "bash: 5.2 → 5.3\n" {
+			t.Fatalf("unexpected diff text: %q", res.DiffText)
+		}
+		if res.NoChange {
+			t.Fatal("expected NoChange = false")
+		}
+	})
 }
