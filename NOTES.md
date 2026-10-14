@@ -1,4 +1,4 @@
-# Architecture Decision Records
+# Development Notes
 
 ## Minimal tooling in nixpkgs
 
@@ -20,6 +20,11 @@
 - Prefer bashless implementations.
 - Keep long bash scripts outside workflow YAML files so `shellcheck` and `dprint` can format and lint them.
 - External scripts cannot use GitHub Actions template syntax (`${{ ... }}`), but passing values through environment variables avoids script injection risks.
+
+## Reusable workflow script execution
+
+- Reusable workflows run in the caller repository context, so local scripts cannot be called directly.
+- Keep helper scripts inside Nix packages and run them via `nix run` so external repositories can fetch them.
 
 ## Language selection
 
