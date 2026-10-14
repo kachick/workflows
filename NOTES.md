@@ -1,5 +1,11 @@
 # Development Notes
 
+## Fail-safe over green badges
+
+- Prioritize security above all else. The goal is keeping repositories safe, not keeping CI badges green.
+- Merging an uncertain or suspicious change is the worst possible outcome.
+- When facing an unknown or unexpected pattern (such as unrecognized pull request titles or ambiguous checks), true fail-safe behavior is to stop: exit with an error, or skip merging and print a log instead of guessing.
+
 ## Minimal tooling in nixpkgs
 
 - Add tools only when they are common in nixpkgs `stdenv` or `updateScript`.
