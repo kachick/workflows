@@ -152,7 +152,7 @@ func run() error {
 		oldIDs, err := client.FindOutdatedComments(ctx, owner, repoName, prNumber, report.Marker)
 		if err != nil {
 			if errors.Is(err, gh.ErrPermissionDenied) {
-				fmt.Fprintln(os.Stderr, "Warning: GitHub token lacks permission to list comments. Continuing without comment minimize.")
+				fmt.Fprintln(os.Stderr, "::warning::GitHub token lacks permission to list comments. Continuing without comment minimize.")
 			} else {
 				fmt.Fprintf(os.Stderr, "Warning: failed to search old comments: %v\n", err)
 			}
@@ -167,7 +167,7 @@ func run() error {
 		// Post new comment
 		if err := client.PostComment(ctx, owner, repoName, prNumber, rep.CommentMarkdown); err != nil {
 			if errors.Is(err, gh.ErrPermissionDenied) {
-				fmt.Fprintln(os.Stderr, "Warning: GitHub token lacks permission to post comment. Diff was posted to Step Summary instead.")
+				fmt.Fprintln(os.Stderr, "::warning::GitHub token lacks permission to post PR comment. Diff was posted to Step Summary instead.")
 				return nil
 			}
 			return fmt.Errorf("failed to post pull request comment: %w", err)
