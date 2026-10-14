@@ -23,10 +23,10 @@ on:
         type: string
         default: 'Bump flake.lock and related dependencies'
       pr-body:
-        description: 'Body for the pull request'
+        description: 'Additional body for the pull request'
         required: false
         type: string
-        default: 'This PR was generated automatically.'
+        default: ''
       branch-name:
         description: 'Branch name to push the changes to'
         required: false
@@ -79,6 +79,7 @@ jobs:
           GITHUB_TOKEN: ${{ steps.publish-token.outputs.token }}
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
           WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
           PR_BRANCH: ${{ inputs.branch-name }}
           POST_COMMAND: ${{ inputs.post-commit-lock-file }}
           POST_COMMIT_TITLE: ${{ inputs.post-commit-lock-file-title }}

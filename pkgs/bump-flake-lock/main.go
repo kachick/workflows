@@ -22,6 +22,64 @@ type Config struct {
 	GitUserEmail    string
 }
 
+type WorkflowMetadata struct {
+	ServerURL          string
+	Repository         string
+	RunID              string
+	WorkflowRepository string
+	WorkflowSHA        string
+	WorkflowFilePath   string
+}
+
+func (m WorkflowMetadata) IsComplete() bool {
+	return m.ServerURL != "" &&
+		m.Repository != "" &&
+		m.RunID != "" &&
+		m.WorkflowRepository != "" &&
+		m.WorkflowSHA != "" &&
+		m.WorkflowFilePath != ""
+}
+
+func (m WorkflowMetadata) HeaderText() string {
+	runURL := fmt.Sprintf("%s/%s/actions/runs/%s", m.ServerURL, m.Repository, m.RunID)
+	permalink := fmt.Sprintf("%s/%s/blob/%s/%s", m.ServerURL, m.WorkflowRepository, m.WorkflowSHA, m.WorkflowFilePath)
+	return fmt.Sprintf("This PR was generated automatically by [workflow run](%s) (defined at [%s](%s)).",
+		runURL, m.WorkflowRepository, permalink)
+}
+
+func getWorkflowMetadata() WorkflowMetadata {
+	serverURL := os.Getenv("GITHUB_SERVER_URL")
+	if serverURL == "" {
+		serverURL = "https://github.com"
+	}
+	return WorkflowMetadata{
+		ServerURL:          serverURL,
+		Repository:         os.Getenv("GITHUB_REPOSITORY"),
+		RunID:              os.Getenv("GITHUB_RUN_ID"),
+		WorkflowRepository: os.Getenv("WORKFLOW_REPOSITORY"),
+		WorkflowSHA:        os.Getenv("WORKFLOW_SHA"),
+		WorkflowFilePath:   os.Getenv("WORKFLOW_FILE_PATH"),
+	}
+}
+
+func buildPRBody(customBody string, meta WorkflowMetadata, isCI bool) (string, error) {
+	var header string
+	if meta.IsComplete() {
+		header = meta.HeaderText()
+	} else if isCI {
+		return "", fmt.Errorf("missing required workflow metadata in CI environment: %+v", meta)
+	} else {
+		header = "This PR was generated automatically."
+	}
+
+	cleanCustom := strings.TrimSpace(customBody)
+	if cleanCustom == "" || cleanCustom == "This PR was generated automatically." {
+		return header, nil
+	}
+
+	return header + "\n\n" + cleanCustom, nil
+}
+
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -45,7 +103,7 @@ func parseConfig(args []string) (*Config, error) {
 	fs.StringVar(&cfg.PostCommand, "post-command", "", "Command to run after updating flake.lock")
 	fs.StringVar(&cfg.PostCommitTitle, "post-commit-title", "", "Commit message for post-command changes")
 	fs.StringVar(&cfg.PRTitle, "pr-title", "Bump flake.lock and related dependencies", "Title for the pull request")
-	fs.StringVar(&cfg.PRBody, "pr-body", "This PR was generated automatically.", "Body for the pull request")
+	fs.StringVar(&cfg.PRBody, "pr-body", "", "Additional body for the pull request")
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "Skip git push and PR creation when true")
 	fs.StringVar(&cfg.GitUserName, "git-user-name", "github-actions[bot]", "Git committer user name")
 	fs.StringVar(&cfg.GitUserEmail, "git-user-email", "41898282+github-actions[bot]@users.noreply.github.com", "Git committer user email")
@@ -67,7 +125,7 @@ func parseConfig(args []string) (*Config, error) {
 	if env := os.Getenv("PR_TITLE"); env != "" && cfg.PRTitle == "Bump flake.lock and related dependencies" {
 		cfg.PRTitle = env
 	}
-	if env := os.Getenv("PR_BODY"); env != "" && cfg.PRBody == "This PR was generated automatically." {
+	if env := os.Getenv("PR_BODY"); env != "" && cfg.PRBody == "" {
 		cfg.PRBody = env
 	}
 	if env := os.Getenv("DRY_RUN"); env != "" && !cfg.DryRun {
@@ -167,6 +225,11 @@ func execute(ctx context.Context, cfg *Config) error {
 		return fmt.Errorf("invalid commit count %q: %w", countStr, err)
 	}
 
+	body, err := buildPRBody(cfg.PRBody, getWorkflowMetadata(), os.Getenv("GITHUB_ACTIONS") == "true")
+	if err != nil {
+		return fmt.Errorf("failed to build PR body: %w", err)
+	}
+
 	if count <= 0 {
 		fmt.Println("No commits added. Nothing to push or create.")
 		return nil
@@ -190,7 +253,7 @@ func execute(ctx context.Context, cfg *Config) error {
 			"--base", defaultBranch,
 			"--head", cfg.BranchName,
 			"--title", cfg.PRTitle,
-			"--body", cfg.PRBody,
+			"--body", body,
 		}
 		if err := runCmd(ctx, env, "gh", createArgs...); err != nil {
 			return fmt.Errorf("failed to create PR: %w", err)
