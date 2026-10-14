@@ -24,6 +24,16 @@ Accepting a small delay (such as running every two hours instead of immediate ev
 3. **Zero waiting overhead**: The job only inspects pull requests where all status checks are already completed, finishing in seconds without keeping runners waiting.
 4. **Zero repository maintenance**: Works out of the box without configuring required status check names on each repository.
 
+## Design Choices & Intentional Limits
+
+- **Why automerge does not approve pull requests**:
+  - GitHub forbids approving a pull request with the same account that created it. An app or token cannot approve its own pull requests.
+  - Using a separate token or app just to approve pull requests adds secret management complexity and increases security risks.
+  - Having a bot approve another bot pull request adds no real security value.
+  - If automatic merging is desired on personal repositories, do not require pull request reviews before merging for bot accounts in repository branch protection or rulesets.
+- **Why `runs-on` is not an input**:
+  - Automerge is a chore workflow with fixed runner needs. It runs on `ubuntu-26.04` directly without matrix setups or different platforms.
+
 ## Usage
 
 ### Reusable Workflow

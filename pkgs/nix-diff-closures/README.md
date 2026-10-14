@@ -18,6 +18,8 @@ Post Nix closure differences on pull requests when `flake.lock` changes.
   Provided as a reusable workflow (`workflow_call`) so other repositories can use it with only a few lines of configuration.
 - **Logic inside a dedicated CLI**:
   Keeps shell scripts minimal and puts core logic (diffing, truncation, and GitHub API operations) into a Go CLI to make local testing easy.
+- **`runs-on` requirement as an exception**:
+  Workflows in this repository generally use fixed runners without a `runs-on` input. In contrast, `nix-diff-closures` requires `runs-on` as an input because evaluating and building Nix derivations must match the target repository system architecture (such as macOS or specific Linux platforms).
 
 ## Usage
 
