@@ -55,3 +55,11 @@
 - Accidental leaks caused by implementation bugs or unexpected command outputs would immediately expose secrets to the public.
 - Verify all data sent to external sinks with `betterleaks` before posting.
 - Call `betterleaks` as an external tool wrapped by Nix (`makeWrapper`) instead of importing the Go SDK directly to keep `go.mod` free of third-party dependencies (`vendorHash = null`).
+
+## Do not add dry-run mode to chore workflows
+
+- Avoid adding `dry-run` options back to chore workflows (such as `automerge` and `bump-flake-lock`).
+- A dry-run mode was previously used to test workflows on `pull_request` events.
+- However, testing workflows that require GitHub App tokens on pull requests introduces complex secret management and security risks.
+- Also, a dry-run cannot verify real end-to-end actions (such as pushing branches or merging pull requests) anyway.
+- Keeping these workflows strictly on `schedule` and `workflow_dispatch` simplifies token boundaries and keeps repositories safe.
