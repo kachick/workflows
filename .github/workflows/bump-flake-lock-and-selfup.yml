@@ -20,9 +20,9 @@ jobs:
     uses: $/.github/workflows/reusable-bump-flake-lock.yml
     with:
       runs-on: ubuntu-26.04
-      app-id: ${{ vars.APP_ID }}
+      app-id: ${{ vars.SAMU_APP_ID }}
       dry-run: ${{ github.event_name == 'pull_request' }}
       post-commit-lock-file: nix develop --command task selfup
       post-commit-lock-file-title: 'Sync CI dependencies with nixpkgs'
     secrets:
-      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+      APP_PRIVATE_KEY: ${{ secrets.SAMU_APP_PRIVATE_KEY }}
