@@ -30,6 +30,7 @@
         in
         {
           nix-diff-closures = pkgs.callPackage ./pkgs/nix-diff-closures/package.nix { };
+          bump-flake-lock = pkgs.callPackage ./pkgs/bump-flake-lock/package.nix { };
         }
       );
 

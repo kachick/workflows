@@ -53,14 +53,6 @@ jobs:
   bump:
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 30
-    env:
-      PR_BRANCH: ${{ inputs.branch-name }}
-      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-      DRY_RUN: ${{ inputs.dry-run }}
-      POST_COMMAND: ${{ inputs.post-commit-lock-file }}
-      POST_COMMIT_TITLE: ${{ inputs.post-commit-lock-file-title }}
-      PR_TITLE: ${{ inputs.pr-title }}
-      PR_BODY: ${{ inputs.pr-body }}
     steps:
       - name: Generate GitHub Apps token
         id: publish-token
@@ -85,52 +77,30 @@ jobs:
           extra-conf: |
             access-tokens = github.com=${{ github.token }}
 
-      - name: Prepare Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -C "${PR_BRANCH}"
-
-      - name: Update flake.lock and commit
-        run: nix flake update --commit-lock-file
-
-      - name: Run post-commit-lock-file command and commit
-        if: inputs.post-commit-lock-file != ''
-        run: |
-          eval "${POST_COMMAND}"
-          if [ -n "$(git status --porcelain)" ]; then
-            COMMIT_TITLE="${POST_COMMIT_TITLE:-${POST_COMMAND}}"
-            git add -A
-            git commit -m "${COMMIT_TITLE}"
-          fi
-
-      - name: Push branch and create PR
+      - name: Bump flake.lock and create PR
         env:
           GITHUB_TOKEN: ${{ steps.publish-token.outputs.token }}
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          PR_BRANCH: ${{ inputs.branch-name }}
+          POST_COMMAND: ${{ inputs.post-commit-lock-file }}
+          POST_COMMIT_TITLE: ${{ inputs.post-commit-lock-file-title }}
+          PR_TITLE: ${{ inputs.pr-title }}
+          PR_BODY: ${{ inputs.pr-body }}
+          DRY_RUN: ${{ inputs.dry-run }}
         run: |
-          if [ -z "${DEFAULT_BRANCH}" ]; then
-            DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@' || true)"
-            DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
-          fi
+          set -euo pipefail
 
-          count="$(git rev-list --count "origin/${DEFAULT_BRANCH}..")"
-          if [ "$count" -gt 0 ]; then
-            echo "Found ${count} commit(s)."
-            if [ "${DRY_RUN}" = "true" ]; then
-              echo "Dry run enabled. Skipping push and PR creation."
-              exit 0
-            fi
-
-            echo "Pushing to ${PR_BRANCH}..."
-            git push origin "${PR_BRANCH}" --force
-
-            if ! gh pr view "${PR_BRANCH}" --json state --jq .state 2>/dev/null | grep -q "OPEN"; then
-              gh pr create \
-                --base "${DEFAULT_BRANCH}" \
-                --head "${PR_BRANCH}" \
-                --title "${PR_TITLE}" \
-                --body "${PR_BODY}"
-            fi
+          if [ -n "${WORKFLOW_REPOSITORY}" ] && [ -n "${WORKFLOW_SHA}" ]; then
+            FLAKE_REF="github:${WORKFLOW_REPOSITORY}/${WORKFLOW_SHA}"
           else
-            echo "No commits added. Nothing to push or create."
+            FLAKE_REF="."
           fi
+
+          nix run "${FLAKE_REF}#bump-flake-lock" -- \
+            --branch-name="${PR_BRANCH}" \
+            --post-command="${POST_COMMAND}" \
+            --post-commit-title="${POST_COMMIT_TITLE}" \
+            --pr-title="${PR_TITLE}" \
+            --pr-body="${PR_BODY}" \
+            --dry-run="${DRY_RUN}"
