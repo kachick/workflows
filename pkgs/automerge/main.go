@@ -164,16 +164,20 @@ func checkDependabotBump(title string) (disallowed bool, reason string) {
 		return false, "allowed cachix update"
 	}
 
-	oldMajor, oldMinor := extractVersionParts(oldVer)
-	newMajor, newMinor := extractVersionParts(newVer)
+	oldMajor, _ := extractVersionParts(oldVer)
+	newMajor, _ := extractVersionParts(newVer)
 
-	if oldMajor != newMajor {
+	// SemVer treats 0.x minor bumps as breaking changes, but projects choosing 0.x
+	// tools already accept rapid changes. Also allow 0.x to 1.x as the first stable release.
+	if oldMajor == "0" {
+		if newMajor == "0" || newMajor == "1" {
+			return false, "allowed 0.x or initial stable release"
+		}
 		return true, fmt.Sprintf("major update (%s -> %s)", oldVer, newVer)
 	}
 
-	// SemVer treats minor updates in 0.x releases as breaking changes (e.g. 0.1.0 -> 0.2.0).
-	if oldMajor == "0" && oldMinor != newMinor {
-		return true, fmt.Sprintf("0.x minor update (%s -> %s)", oldVer, newVer)
+	if oldMajor != newMajor {
+		return true, fmt.Sprintf("major update (%s -> %s)", oldVer, newVer)
 	}
 
 	return false, "non-breaking update"

@@ -99,14 +99,15 @@ func TestIsDisallowedDependabotMajor(t *testing.T) {
 		{title: "Bump cachix/install-nix-action from v26 to v27", disallowed: false},
 		{title: "Bump the rust group with 2 updates", disallowed: true},
 		{title: "Bump the dev-dependencies group in /sub/dir with 3 updates", disallowed: true},
-		{title: "Bump foo from 0.1.0 to 0.2.0", disallowed: true},
+		{title: "Bump foo from 0.1.0 to 0.2.0", disallowed: false},
 		{title: "Bump foo from 0.1.0 to 0.1.1", disallowed: false},
-		{title: "Bump foo from v0.1.0 to v0.2.0", disallowed: true},
+		{title: "Bump foo from v0.1.0 to v0.2.0", disallowed: false},
 		{title: "Bump foo from v0.1.0 to v0.1.1", disallowed: false},
-		{title: "Bump foo from 0.1 to 0.2", disallowed: true},
+		{title: "Bump foo from 0.1 to 0.2", disallowed: false},
 		{title: "Bump foo from 0.1 to 0.1.1", disallowed: false},
-		{title: "Bump foo from 0.9.0 to 1.0.0", disallowed: true},
-		{title: "Bump golang.org/x/sys from 0.48.0 to 0.49.0", disallowed: true},
+		{title: "Bump foo from 0.9.0 to 1.0.0", disallowed: false},
+		{title: "Bump foo from 0.1.0 to 2.0.0", disallowed: true},
+		{title: "Bump golang.org/x/sys from 0.48.0 to 0.49.0", disallowed: false},
 		{title: "Update dependencies", disallowed: true},
 	}
 
@@ -368,8 +369,18 @@ func TestCheckDependabotBump(t *testing.T) {
 		},
 		{
 			title:      "Bump golang.org/x/sys from 0.48.0 to 0.49.0",
+			disallowed: false,
+			wantReason: "allowed 0.x or initial stable release",
+		},
+		{
+			title:      "Bump foo from 0.9.0 to 1.0.0",
+			disallowed: false,
+			wantReason: "allowed 0.x or initial stable release",
+		},
+		{
+			title:      "Bump foo from 0.1.0 to 2.0.0",
 			disallowed: true,
-			wantReason: "0.x minor update (0.48.0 -> 0.49.0)",
+			wantReason: "major update (0.1.0 -> 2.0.0)",
 		},
 		{
 			title:      "Bump cachix/cachix-action from 14 to 15",
@@ -411,6 +422,13 @@ func TestCheckEligibility(t *testing.T) {
 	ok, reason := checkEligibility(basePR, defaultAllowedBots)
 	if !ok || reason != "eligible for merge" {
 		t.Fatalf("expected eligible for merge, got ok=%v, reason=%q", ok, reason)
+	}
+
+	dependabot0xPR := basePR
+	dependabot0xPR.Author.Login = "dependabot[bot]"
+	dependabot0xPR.Title = "Bump golang.org/x/sys from 0.48.0 to 0.49.0"
+	if ok, reason := checkEligibility(dependabot0xPR, defaultAllowedBots); !ok {
+		t.Fatalf("expected dependabot 0.x bump to be eligible, got reason=%q", reason)
 	}
 
 	tests := []struct {
@@ -465,12 +483,12 @@ func TestCheckEligibility(t *testing.T) {
 			wantReason: `status check concluded with "FAILURE"`,
 		},
 		{
-			name: "dependabot 0.x minor update",
+			name: "dependabot major update",
 			modify: func(pr *PullRequest) {
 				pr.Author.Login = "dependabot[bot]"
-				pr.Title = "Bump golang.org/x/sys from 0.48.0 to 0.49.0"
+				pr.Title = "Bump actions/checkout from 3.0.0 to 4.0.0"
 			},
-			wantReason: "disallowed dependabot bump: 0.x minor update (0.48.0 -> 0.49.0)",
+			wantReason: "disallowed dependabot bump: major update (3.0.0 -> 4.0.0)",
 		},
 	}
 
