@@ -48,6 +48,7 @@ type PullRequest struct {
 	Mergeable         string            `json:"mergeable"`
 	StatusCheckRollup []StatusCheckItem `json:"statusCheckRollup"`
 	Labels            []Label           `json:"labels"`
+	BaseRefName       string            `json:"baseRefName"`
 }
 
 type Label struct {
@@ -75,7 +76,7 @@ type Config struct {
 type CommandRunner interface {
 	FetchOpenPRs(ctx context.Context) ([]PullRequest, error)
 	FetchPRDiff(ctx context.Context, number int) (string, error)
-	FetchBaseFile(ctx context.Context, path string) ([]byte, error)
+	FetchBaseFile(ctx context.Context, baseRef, path string) ([]byte, error)
 	FetchPRFile(ctx context.Context, number int, path string) ([]byte, error)
 	EnsureLabel(ctx context.Context, name, description, color string) error
 	AddLabelToPR(ctx context.Context, number int, label string) error
@@ -87,7 +88,7 @@ type DefaultCommandRunner struct{}
 func (r *DefaultCommandRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"--state", "open",
-		"--json", "number,title,body,author,isDraft,mergeable,statusCheckRollup,labels",
+		"--json", "number,title,body,author,isDraft,mergeable,statusCheckRollup,labels,baseRefName",
 	)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -118,31 +119,35 @@ func (r *DefaultCommandRunner) FetchPRDiff(ctx context.Context, number int) (str
 	return stdout.String(), nil
 }
 
-func (r *DefaultCommandRunner) FetchBaseFile(ctx context.Context, path string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", "show", "HEAD:"+path)
-	var stdout bytes.Buffer
+func (r *DefaultCommandRunner) fetchFileContent(ctx context.Context, ref, path string) ([]byte, error) {
+	endpoint := fmt.Sprintf("/repos/{owner}/{repo}/contents/%s?ref=%s", path, ref)
+	cmd := exec.CommandContext(ctx, "gh", "api",
+		"-H", "Accept: application/vnd.github.raw+json",
+		endpoint,
+	)
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		// File did not exist in base branch
-		return nil, nil
+		if strings.Contains(stderr.String(), "HTTP 404") || strings.Contains(stdout.String(), `"status": "404"`) {
+			// File does not exist at the given ref
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to fetch %q at ref %q (%w): %s", path, ref, err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
 }
 
-func (r *DefaultCommandRunner) FetchPRFile(ctx context.Context, number int, path string) ([]byte, error) {
-	fetchCmd := exec.CommandContext(ctx, "git", "fetch", "origin", fmt.Sprintf("pull/%d/head", number))
-	if err := fetchCmd.Run(); err != nil {
-		return nil, fmt.Errorf("failed to git fetch pr %d: %w", number, err)
+func (r *DefaultCommandRunner) FetchBaseFile(ctx context.Context, baseRef, path string) ([]byte, error) {
+	if baseRef == "" {
+		baseRef = "HEAD"
 	}
+	return r.fetchFileContent(ctx, baseRef, path)
+}
 
-	showCmd := exec.CommandContext(ctx, "git", "show", "FETCH_HEAD:"+path)
-	var stdout bytes.Buffer
-	showCmd.Stdout = &stdout
-	if err := showCmd.Run(); err != nil {
-		// File does not exist in PR branch
-		return nil, nil
-	}
-	return stdout.Bytes(), nil
+func (r *DefaultCommandRunner) FetchPRFile(ctx context.Context, number int, path string) ([]byte, error) {
+	ref := fmt.Sprintf("pull/%d/head", number)
+	return r.fetchFileContent(ctx, ref, path)
 }
 
 func (r *DefaultCommandRunner) EnsureLabel(ctx context.Context, name, description, color string) error {
@@ -492,7 +497,7 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 	defer os.RemoveAll(tmpDir)
 
 	for _, lockfile := range lockfiles {
-		baseBytes, err := s.Runner.FetchBaseFile(ctx, lockfile)
+		baseBytes, err := s.Runner.FetchBaseFile(ctx, pr.BaseRefName, lockfile)
 		if err != nil {
 			return false, "", fmt.Errorf("failed to fetch base file %q: %w", lockfile, err)
 		}

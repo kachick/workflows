@@ -362,7 +362,7 @@ func (m *mockRunner) FetchPRDiff(ctx context.Context, number int) (string, error
 	return "diff --git a/go.mod b/go.mod\n+example", nil
 }
 
-func (m *mockRunner) FetchBaseFile(ctx context.Context, path string) ([]byte, error) {
+func (m *mockRunner) FetchBaseFile(ctx context.Context, baseRef, path string) ([]byte, error) {
 	if m.baseFiles != nil {
 		if content, ok := m.baseFiles[path]; ok {
 			return content, nil
