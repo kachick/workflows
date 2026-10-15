@@ -266,11 +266,6 @@ func extractVersionParts(v string) (major string, minor string) {
 }
 
 func checkVersionBump(pkg, oldVer, newVer string) (disallowed bool, reason string) {
-	// Allow major updates only for cachix because cachix releases major versions frequently.
-	if strings.Contains(pkg, "cachix") {
-		return false, "allowed cachix update"
-	}
-
 	oldMajor, _ := extractVersionParts(oldVer)
 	newMajor, _ := extractVersionParts(newVer)
 

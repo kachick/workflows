@@ -22,6 +22,8 @@ buildGo127Module (finalAttrs: {
 
   vendorHash = null;
 
+  subPackages = [ "pkgs/nix-diff-closures" ];
+
   nativeBuildInputs = [ makeWrapper ];
 
   postInstall = ''

@@ -137,8 +137,8 @@ func TestIsDisallowedDependabotMajor(t *testing.T) {
 		{title: "Bump actions/checkout from v3.0.0 to v4.0.0", disallowed: true},
 		{title: "Bump actions/checkout from 4.0.0 to 4.1.0 in /.github/workflows", disallowed: false},
 		{title: "Bump actions/checkout from 3.0.0 to 4.0.0 in /.github/workflows", disallowed: true},
-		{title: "Bump cachix/cachix-action from 14 to 15", disallowed: false},
-		{title: "Bump cachix/install-nix-action from v26 to v27", disallowed: false},
+		{title: "Bump cachix/cachix-action from 14 to 15", disallowed: true},
+		{title: "Bump cachix/install-nix-action from v26 to v27", disallowed: true},
 		{title: "Bump the rust group with 2 updates", disallowed: true},
 		{title: "Bump the dev-dependencies group in /sub/dir with 3 updates", disallowed: true},
 		{title: "Bump foo from 0.1.0 to 0.2.0", disallowed: false},
@@ -305,12 +305,12 @@ func TestIsEligible(t *testing.T) {
 		t.Errorf("Dependabot group update should not be eligible")
 	}
 
-	// Dependabot cachix major bump (eligible)
+	// Dependabot cachix major bump (disallowed)
 	dependabotCachixPR := basePR
 	dependabotCachixPR.Author.Login = "dependabot[bot]"
 	dependabotCachixPR.Title = "Bump cachix/cachix-action from 14 to 15"
-	if !isEligible(dependabotCachixPR, defaultAllowedBots) {
-		t.Errorf("Dependabot cachix major bump should be eligible")
+	if isEligible(dependabotCachixPR, defaultAllowedBots) {
+		t.Errorf("Dependabot cachix major bump should not be eligible")
 	}
 
 	// Renovate major bump (disallowed)
@@ -877,8 +877,8 @@ func TestCheckDependabotBump(t *testing.T) {
 		},
 		{
 			title:      "Bump cachix/cachix-action from 14 to 15",
-			disallowed: false,
-			wantReason: "allowed cachix update",
+			disallowed: true,
+			wantReason: "major update (14 -> 15)",
 		},
 		{
 			title:      "Bump the rust group with 2 updates",
@@ -1099,8 +1099,8 @@ func TestCheckRenovateBump(t *testing.T) {
 		{
 			name:       "cachix major update",
 			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [cachix/cachix-action](https://example.com) | major | `14` → `15` |\n",
-			disallowed: false,
-			wantReason: "allowed cachix update",
+			disallowed: true,
+			wantReason: "major update (14 -> 15)",
 		},
 		{
 			name:       "unlinked package name",

@@ -22,6 +22,8 @@ buildGo127Module (finalAttrs: {
 
   vendorHash = null;
 
+  subPackages = [ "pkgs/bump-flake-lock" ];
+
   nativeBuildInputs = [ makeWrapper ];
 
   postInstall = ''

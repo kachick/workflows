@@ -24,6 +24,8 @@ buildGo127Module (finalAttrs: {
 
   vendorHash = null;
 
+  subPackages = [ "pkgs/automerge" ];
+
   nativeBuildInputs = [ makeWrapper ];
 
   postInstall = ''
