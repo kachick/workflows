@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/kachick/workflows/internal/leakcheck"
+	"github.com/kachick/workflows/internal/workflowmeta"
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/diff"
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/gh"
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/report"
@@ -100,7 +101,7 @@ func run() error {
 		return fmt.Errorf("failed to compute closure diffs: %w", err)
 	}
 
-	meta := getWorkflowMetadata()
+	meta := workflowmeta.Get()
 	isCI := os.Getenv("GITHUB_ACTIONS") == "true"
 
 	rep, err := report.Build(results, maxSize, headSize, meta, isCI)
@@ -211,19 +212,4 @@ func writeStepSummary(markdown string) {
 	}
 	defer f.Close()
 	_, _ = fmt.Fprintln(f, markdown)
-}
-
-func getWorkflowMetadata() report.WorkflowMetadata {
-	serverURL := os.Getenv("GITHUB_SERVER_URL")
-	if serverURL == "" {
-		serverURL = "https://github.com"
-	}
-	return report.WorkflowMetadata{
-		ServerURL:          serverURL,
-		Repository:         os.Getenv("GITHUB_REPOSITORY"),
-		RunID:              os.Getenv("GITHUB_RUN_ID"),
-		WorkflowRepository: os.Getenv("WORKFLOW_REPOSITORY"),
-		WorkflowSHA:        os.Getenv("WORKFLOW_SHA"),
-		WorkflowFilePath:   os.Getenv("WORKFLOW_FILE_PATH"),
-	}
 }

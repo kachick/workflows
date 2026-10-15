@@ -17,6 +17,7 @@ buildGo127Module (finalAttrs: {
     root = ../../.;
     fileset = lib.fileset.unions [
       ../../go.mod
+      ../../internal
       ./.
     ];
   };

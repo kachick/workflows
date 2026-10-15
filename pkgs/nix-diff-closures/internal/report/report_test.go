@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/kachick/workflows/internal/workflowmeta"
 )
 
 func TestTruncateUTF8Safe(t *testing.T) {
@@ -55,7 +57,7 @@ func TestTruncateUTF8Safe(t *testing.T) {
 }
 
 func TestBuildReport(t *testing.T) {
-	completeMeta := WorkflowMetadata{
+	completeMeta := workflowmeta.Metadata{
 		ServerURL:          "https://github.com",
 		Repository:         "kachick/workflows",
 		RunID:              "12345678",
@@ -166,7 +168,7 @@ func TestBuildReport(t *testing.T) {
 	})
 
 	t.Run("incomplete metadata falls back to default outside CI", func(t *testing.T) {
-		incomplete := WorkflowMetadata{}
+		incomplete := workflowmeta.Metadata{}
 		results := []TargetResult{
 			{
 				Target:   "devShells.x86_64-linux.default",

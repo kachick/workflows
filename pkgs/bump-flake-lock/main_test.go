@@ -3,6 +3,8 @@ package main
 import (
 	"slices"
 	"testing"
+
+	"github.com/kachick/workflows/internal/workflowmeta"
 )
 
 func TestFilterEnv(t *testing.T) {
@@ -91,7 +93,7 @@ func TestParseConfigEnvFallback(t *testing.T) {
 }
 
 func TestBuildPRBody(t *testing.T) {
-	completeMeta := WorkflowMetadata{
+	completeMeta := workflowmeta.Metadata{
 		ServerURL:          "https://github.com",
 		Repository:         "kachick/workflows",
 		RunID:              "12345678",
@@ -143,7 +145,7 @@ func TestBuildPRBody(t *testing.T) {
 	})
 
 	t.Run("incomplete metadata falls back to default in non-CI environment", func(t *testing.T) {
-		incomplete := WorkflowMetadata{}
+		incomplete := workflowmeta.Metadata{}
 		body, err := buildPRBody("", incomplete, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

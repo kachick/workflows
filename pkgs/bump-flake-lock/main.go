@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/kachick/workflows/internal/leakcheck"
+	"github.com/kachick/workflows/internal/workflowmeta"
 )
 
 type Config struct {
@@ -23,55 +24,11 @@ type Config struct {
 	GitUserEmail    string
 }
 
-type WorkflowMetadata struct {
-	ServerURL          string
-	Repository         string
-	RunID              string
-	WorkflowRepository string
-	WorkflowSHA        string
-	WorkflowFilePath   string
-}
-
-func (m WorkflowMetadata) IsComplete() bool {
-	return m.ServerURL != "" &&
-		m.Repository != "" &&
-		m.RunID != "" &&
-		m.WorkflowRepository != "" &&
-		m.WorkflowSHA != "" &&
-		m.WorkflowFilePath != ""
-}
-
-func (m WorkflowMetadata) HeaderText() string {
-	runURL := fmt.Sprintf("%s/%s/actions/runs/%s", m.ServerURL, m.Repository, m.RunID)
-	permalink := fmt.Sprintf("%s/%s/blob/%s/%s", m.ServerURL, m.WorkflowRepository, m.WorkflowSHA, m.WorkflowFilePath)
-	return fmt.Sprintf("This PR was generated automatically by [workflow run](%s) (defined at [%s](%s)).",
-		runURL, m.WorkflowRepository, permalink)
-}
-
-func getWorkflowMetadata() WorkflowMetadata {
-	serverURL := os.Getenv("GITHUB_SERVER_URL")
-	if serverURL == "" {
-		serverURL = "https://github.com"
-	}
-	return WorkflowMetadata{
-		ServerURL:          serverURL,
-		Repository:         os.Getenv("GITHUB_REPOSITORY"),
-		RunID:              os.Getenv("GITHUB_RUN_ID"),
-		WorkflowRepository: os.Getenv("WORKFLOW_REPOSITORY"),
-		WorkflowSHA:        os.Getenv("WORKFLOW_SHA"),
-		WorkflowFilePath:   os.Getenv("WORKFLOW_FILE_PATH"),
-	}
-}
-
-func buildPRBody(customBody string, meta WorkflowMetadata, isCI bool) (string, error) {
-	var header string
-	if meta.IsComplete() {
-		header = meta.HeaderText()
-	} else if isCI {
+func buildPRBody(customBody string, meta workflowmeta.Metadata, isCI bool) (string, error) {
+	if !meta.IsComplete() && isCI {
 		return "", fmt.Errorf("missing required workflow metadata in CI environment: %+v", meta)
-	} else {
-		header = "This PR was generated automatically."
 	}
+	header := meta.ProvenanceText("This PR was generated automatically")
 
 	cleanCustom := strings.TrimSpace(customBody)
 	if cleanCustom == "" || cleanCustom == "This PR was generated automatically." {
@@ -249,7 +206,7 @@ func execute(ctx context.Context, cfg *Config) error {
 		return fmt.Errorf("invalid commit count %q: %w", countStr, err)
 	}
 
-	body, err := buildPRBody(cfg.PRBody, getWorkflowMetadata(), os.Getenv("GITHUB_ACTIONS") == "true")
+	body, err := buildPRBody(cfg.PRBody, workflowmeta.Get(), os.Getenv("GITHUB_ACTIONS") == "true")
 	if err != nil {
 		return fmt.Errorf("failed to build PR body: %w", err)
 	}

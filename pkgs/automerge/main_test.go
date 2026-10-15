@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/kachick/workflows/internal/workflowmeta"
 )
 
 func TestParseConfigDefaults(t *testing.T) {
@@ -474,7 +476,7 @@ func TestExecute(t *testing.T) {
 		MergeMethod: "squash",
 	}
 
-	err := execute(context.Background(), cfg, runner, nil, nil, WorkflowMetadata{})
+	err := execute(context.Background(), cfg, runner, nil, nil, workflowmeta.Metadata{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -489,7 +491,7 @@ func TestExecute(t *testing.T) {
 func TestExecuteNoOpenPRs(t *testing.T) {
 	runner := &mockRunner{prs: []PullRequest{}}
 	cfg := &Config{AllowedBots: defaultAllowedBots, MergeMethod: "squash"}
-	if err := execute(context.Background(), cfg, runner, nil, nil, WorkflowMetadata{}); err != nil {
+	if err := execute(context.Background(), cfg, runner, nil, nil, workflowmeta.Metadata{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -559,7 +561,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 		GeminiModel:  "gemini-3.8-flash",
 	}
 
-	err := execute(context.Background(), cfg, runner, reviewer, nil, WorkflowMetadata{})
+	err := execute(context.Background(), cfg, runner, reviewer, nil, workflowmeta.Metadata{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -600,7 +602,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 		},
 	}
 	runner.mergedPRs = nil
-	if err := execute(context.Background(), cfg, runner, reviewer, nil, WorkflowMetadata{}); err != nil {
+	if err := execute(context.Background(), cfg, runner, reviewer, nil, workflowmeta.Metadata{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(reviewer.calledOn) != 0 {
@@ -636,7 +638,7 @@ func TestExecuteLLMVetoMissingAPIKey(t *testing.T) {
 		GeminiAPIKey: "", // missing API key
 	}
 
-	err := execute(context.Background(), cfg, runner, nil, nil, WorkflowMetadata{})
+	err := execute(context.Background(), cfg, runner, nil, nil, workflowmeta.Metadata{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1229,7 +1231,7 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 		EnableOSVScanner: true,
 	}
 
-	err := execute(context.Background(), cfg, runner, reviewer, vulnScanner, WorkflowMetadata{})
+	err := execute(context.Background(), cfg, runner, reviewer, vulnScanner, workflowmeta.Metadata{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1290,35 +1292,6 @@ func TestParseConfigEnableOSVScanner(t *testing.T) {
 	}
 }
 
-func TestBuildMergeComment(t *testing.T) {
-	t.Run("complete metadata generates full provenance link", func(t *testing.T) {
-		meta := WorkflowMetadata{
-			ServerURL:          "https://github.com",
-			Repository:         "kachick/workflows",
-			RunID:              "12345678",
-			WorkflowRepository: "kachick/workflows",
-			WorkflowSHA:        "abcdef123456",
-			WorkflowFilePath:   ".github/workflows/reusable-automerge.yml",
-		}
-		expected := "Merged automatically by [workflow run](https://github.com/kachick/workflows/actions/runs/12345678) (defined at [kachick/workflows](https://github.com/kachick/workflows/blob/abcdef123456/.github/workflows/reusable-automerge.yml))."
-		got := buildMergeComment(meta)
-		if got != expected {
-			t.Errorf("buildMergeComment() = %q, want %q", got, expected)
-		}
-	})
-
-	t.Run("incomplete metadata falls back to simple message", func(t *testing.T) {
-		meta := WorkflowMetadata{
-			ServerURL: "https://github.com",
-		}
-		expected := "Merged automatically."
-		got := buildMergeComment(meta)
-		if got != expected {
-			t.Errorf("buildMergeComment() = %q, want %q", got, expected)
-		}
-	})
-}
-
 func TestExecutePostsMergeComment(t *testing.T) {
 	validChecks := []StatusCheckItem{
 		{Status: "COMPLETED", Conclusion: "SUCCESS"},
@@ -1353,7 +1326,7 @@ func TestExecutePostsMergeComment(t *testing.T) {
 		MergeMethod: "squash",
 	}
 
-	meta := WorkflowMetadata{
+	meta := workflowmeta.Metadata{
 		ServerURL:          "https://github.com",
 		Repository:         "kachick/workflows",
 		RunID:              "99999",
@@ -1371,7 +1344,7 @@ func TestExecutePostsMergeComment(t *testing.T) {
 	if len(runner.comments[501]) != 1 {
 		t.Fatalf("expected 1 comment on PR 501, got %v", runner.comments[501])
 	}
-	expectedComment := meta.HeaderText()
+	expectedComment := meta.ProvenanceText("Merged automatically")
 	if runner.comments[501][0] != expectedComment {
 		t.Errorf("expected comment %q, got %q", expectedComment, runner.comments[501][0])
 	}
@@ -1420,7 +1393,16 @@ func TestExecuteLabelsBlockedPR(t *testing.T) {
 		MergeMethod: "squash",
 	}
 
-	err := execute(context.Background(), cfg, runner, nil, nil, WorkflowMetadata{})
+	meta := workflowmeta.Metadata{
+		ServerURL:          "https://github.com",
+		Repository:         "kachick/workflows",
+		RunID:              "99999",
+		WorkflowRepository: "kachick/workflows",
+		WorkflowSHA:        "sha123",
+		WorkflowFilePath:   ".github/workflows/reusable-automerge.yml",
+	}
+
+	err := execute(context.Background(), cfg, runner, nil, nil, meta)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1437,6 +1419,9 @@ func TestExecuteLabelsBlockedPR(t *testing.T) {
 	}
 	if !strings.Contains(runner.comments[601][0], blockedLabelName) {
 		t.Errorf("expected comment on 601 to mention %q, got %q", blockedLabelName, runner.comments[601][0])
+	}
+	if !strings.Contains(runner.comments[601][0], "Inspected by [workflow run]") {
+		t.Errorf("expected comment on 601 to include provenance link, got %q", runner.comments[601][0])
 	}
 
 	// 602 was already labeled, so AddLabelToPR and CommentPR must NOT be called again
@@ -1457,7 +1442,7 @@ func TestExecuteLabelsBlockedPR(t *testing.T) {
 }
 
 func TestBuildStepSummary(t *testing.T) {
-	meta := WorkflowMetadata{
+	meta := workflowmeta.Metadata{
 		ServerURL:  "https://github.com",
 		Repository: "kachick/workflows",
 	}
@@ -1545,7 +1530,7 @@ func TestExecuteWritesStepSummary(t *testing.T) {
 		MergeMethod: "squash",
 	}
 
-	meta := WorkflowMetadata{
+	meta := workflowmeta.Metadata{
 		ServerURL:  "https://github.com",
 		Repository: "kachick/workflows",
 	}

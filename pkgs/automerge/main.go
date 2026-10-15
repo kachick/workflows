@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kachick/workflows/internal/workflowmeta"
 )
 
 var defaultAllowedBots = []string{
@@ -98,53 +100,6 @@ type Config struct {
 	GeminiAPIKey     string
 	GeminiModel      string
 	EnableOSVScanner bool
-}
-
-type WorkflowMetadata struct {
-	ServerURL          string
-	Repository         string
-	RunID              string
-	WorkflowRepository string
-	WorkflowSHA        string
-	WorkflowFilePath   string
-}
-
-func (m WorkflowMetadata) IsComplete() bool {
-	return m.ServerURL != "" &&
-		m.Repository != "" &&
-		m.RunID != "" &&
-		m.WorkflowRepository != "" &&
-		m.WorkflowSHA != "" &&
-		m.WorkflowFilePath != ""
-}
-
-func (m WorkflowMetadata) HeaderText() string {
-	runURL := fmt.Sprintf("%s/%s/actions/runs/%s", m.ServerURL, m.Repository, m.RunID)
-	permalink := fmt.Sprintf("%s/%s/blob/%s/%s", m.ServerURL, m.WorkflowRepository, m.WorkflowSHA, m.WorkflowFilePath)
-	return fmt.Sprintf("Merged automatically by [workflow run](%s) (defined at [%s](%s)).",
-		runURL, m.WorkflowRepository, permalink)
-}
-
-func getWorkflowMetadata() WorkflowMetadata {
-	serverURL := os.Getenv("GITHUB_SERVER_URL")
-	if serverURL == "" {
-		serverURL = "https://github.com"
-	}
-	return WorkflowMetadata{
-		ServerURL:          serverURL,
-		Repository:         os.Getenv("GITHUB_REPOSITORY"),
-		RunID:              os.Getenv("GITHUB_RUN_ID"),
-		WorkflowRepository: os.Getenv("WORKFLOW_REPOSITORY"),
-		WorkflowSHA:        os.Getenv("WORKFLOW_SHA"),
-		WorkflowFilePath:   os.Getenv("WORKFLOW_FILE_PATH"),
-	}
-}
-
-func buildMergeComment(meta WorkflowMetadata) string {
-	if meta.IsComplete() {
-		return meta.HeaderText()
-	}
-	return "Merged automatically."
 }
 
 type CommandRunner interface {
@@ -906,7 +861,7 @@ Code Diff:
 	return veto, reason, nil
 }
 
-func buildStepSummary(results []PRSummaryResult, meta WorkflowMetadata) string {
+func buildStepSummary(results []PRSummaryResult, meta workflowmeta.Metadata) string {
 	if len(results) == 0 {
 		return "### 🤖 Automerge Summary\n\nNo open pull requests found.\n"
 	}
@@ -959,7 +914,7 @@ func appendFile(path string, content string) error {
 	return err
 }
 
-func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LLMReviewer, vulnScanner VulnerabilityScanner, meta WorkflowMetadata) error {
+func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LLMReviewer, vulnScanner VulnerabilityScanner, meta workflowmeta.Metadata) error {
 	prs, err := runner.FetchOpenPRs(ctx)
 	if err != nil {
 		return err
@@ -1002,7 +957,8 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					}
 					// Why post a comment only on first labeling:
 					// Avoid posting repetitive comments on every scheduled run.
-					commentBody := fmt.Sprintf("Automerge was skipped because %s. Marking with `%s` for manual review.", res.Reason, blockedLabelName)
+					commentBody := fmt.Sprintf("Automerge was skipped because %s. Marking with `%s` for manual review.\n\n%s",
+						res.Reason, blockedLabelName, meta.ProvenanceText("Inspected"))
 					if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
 						fmt.Printf("Warning: failed to comment on blocked PR #%d: %v\n", pr.Number, err)
 					}
@@ -1143,7 +1099,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 			fmt.Printf("Successfully merged PR #%d.\n", pr.Number)
 			// Post comment after successful merge rather than before, because without merge queues,
 			// a merge attempt can fail due to race conditions or conflicts.
-			commentBody := buildMergeComment(meta)
+			commentBody := meta.ProvenanceText("Merged automatically")
 			if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
 				fmt.Printf("Warning: failed to post merge comment for PR #%d: %v\n", pr.Number, err)
 			}
@@ -1185,7 +1141,7 @@ func run(ctx context.Context, args []string) error {
 		reviewer = NewGeminiReviewer(cfg.GeminiAPIKey, cfg.GeminiModel)
 	}
 
-	meta := getWorkflowMetadata()
+	meta := workflowmeta.Get()
 
 	return execute(ctx, cfg, runner, reviewer, vulnScanner, meta)
 }

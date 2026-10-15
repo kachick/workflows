@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/kachick/workflows/internal/workflowmeta"
 )
 
 // Marker is used to identify comments created by this action.
@@ -26,34 +28,6 @@ type TargetResult struct {
 	Error    string
 }
 
-// WorkflowMetadata holds information about the workflow run and definition.
-type WorkflowMetadata struct {
-	ServerURL          string
-	Repository         string
-	RunID              string
-	WorkflowRepository string
-	WorkflowSHA        string
-	WorkflowFilePath   string
-}
-
-// IsComplete checks whether all required fields for workflow provenance are present.
-func (m WorkflowMetadata) IsComplete() bool {
-	return m.ServerURL != "" &&
-		m.Repository != "" &&
-		m.RunID != "" &&
-		m.WorkflowRepository != "" &&
-		m.WorkflowSHA != "" &&
-		m.WorkflowFilePath != ""
-}
-
-// HeaderText returns markdown describing the workflow run and definition.
-func (m WorkflowMetadata) HeaderText() string {
-	runURL := fmt.Sprintf("%s/%s/actions/runs/%s", m.ServerURL, m.Repository, m.RunID)
-	permalink := fmt.Sprintf("%s/%s/blob/%s/%s", m.ServerURL, m.WorkflowRepository, m.WorkflowSHA, m.WorkflowFilePath)
-	return fmt.Sprintf("This report was generated automatically by [workflow run](%s) (defined at [%s](%s)).",
-		runURL, m.WorkflowRepository, permalink)
-}
-
 // Report holds the formatted output and diff metadata.
 type Report struct {
 	CommentMarkdown string
@@ -63,7 +37,7 @@ type Report struct {
 }
 
 // Build generates the comment markdown and full diff text from target results.
-func Build(results []TargetResult, maxSize int, headSize int, meta WorkflowMetadata, isCI bool) (Report, error) {
+func Build(results []TargetResult, maxSize int, headSize int, meta workflowmeta.Metadata, isCI bool) (Report, error) {
 	if maxSize <= 0 {
 		maxSize = DefaultMaxSize
 	}
@@ -71,14 +45,10 @@ func Build(results []TargetResult, maxSize int, headSize int, meta WorkflowMetad
 		headSize = DefaultHeadSize
 	}
 
-	var headerText string
-	if meta.IsComplete() {
-		headerText = meta.HeaderText()
-	} else if isCI {
+	if !meta.IsComplete() && isCI {
 		return Report{}, fmt.Errorf("missing required workflow metadata in CI environment: %+v", meta)
-	} else {
-		headerText = "This report was generated automatically."
 	}
+	headerText := meta.ProvenanceText("This report was generated automatically")
 
 	var fullDiffBuilder strings.Builder
 	hasAnyDiff := false
@@ -115,7 +85,7 @@ func Build(results []TargetResult, maxSize int, headSize int, meta WorkflowMetad
 	}
 
 	if isTruncated {
-		artifactURL := fmt.Sprintf("%s/%s/actions/runs/%s#artifacts", meta.ServerURL, meta.Repository, meta.RunID)
+		artifactURL := fmt.Sprintf("%s#artifacts", meta.RunURL())
 		md.WriteString("> [!NOTE]\n")
 		md.WriteString(fmt.Sprintf("> The diff output is large (%d bytes) and has been truncated to fit GitHub comment size limits.\n", len(fullDiff)))
 		if meta.ServerURL != "" && meta.Repository != "" && meta.RunID != "" {
