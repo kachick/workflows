@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -335,8 +337,6 @@ func TestIsEligible(t *testing.T) {
 type mockRunner struct {
 	prs           []PullRequest
 	diffs         map[int]string
-	baseFiles     map[string][]byte
-	prFiles       map[int]map[string][]byte
 	fetchErr      error
 	diffErrOn     map[int]error
 	ensuredLabels []string
@@ -360,26 +360,6 @@ func (m *mockRunner) FetchPRDiff(ctx context.Context, number int) (string, error
 		return diff, nil
 	}
 	return "diff --git a/go.mod b/go.mod\n+example", nil
-}
-
-func (m *mockRunner) FetchBaseFile(ctx context.Context, baseRef, path string) ([]byte, error) {
-	if m.baseFiles != nil {
-		if content, ok := m.baseFiles[path]; ok {
-			return content, nil
-		}
-	}
-	return nil, nil
-}
-
-func (m *mockRunner) FetchPRFile(ctx context.Context, number int, path string) ([]byte, error) {
-	if m.prFiles != nil {
-		if prMap, ok := m.prFiles[number]; ok {
-			if content, ok := prMap[path]; ok {
-				return content, nil
-			}
-		}
-	}
-	return nil, nil
 }
 
 func (m *mockRunner) EnsureLabel(ctx context.Context, name, description, color string) error {
@@ -1054,46 +1034,20 @@ func TestCheckRenovateBump(t *testing.T) {
 	}
 }
 
-func TestExtractChangedLockfiles(t *testing.T) {
-	diff := `
-diff --git a/README.md b/README.md
-index 123..456 100644
---- a/README.md
-+++ b/README.md
-@@ -1 +1 @@
--old
-+new
-diff --git a/go.mod b/go.mod
-index 111..222 100644
---- a/go.mod
-+++ b/go.mod
-@@ -1 +1 @@
--go 1.26
-+go 1.27
-diff --git a/frontend/package-lock.json b/frontend/package-lock.json
-index 333..444 100644
---- a/frontend/package-lock.json
-+++ b/frontend/package-lock.json
-@@ -1 +1 @@
--old
-+new
-diff --git a/flake.lock b/flake.lock
-index 555..666 100644
---- a/flake.lock
-+++ b/flake.lock
-@@ -1 +1 @@
--old
-+new
-`
-	got := extractChangedLockfiles(diff)
-	want := []string{"frontend/package-lock.json", "go.mod"}
-	if !slices.Equal(got, want) {
-		t.Errorf("extractChangedLockfiles() = %v, want %v", got, want)
+func TestExtractBaseTreeAndApplyPatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := extractBaseTree(context.Background(), tmpDir); err != nil {
+		t.Fatalf("extractBaseTree() failed: %v", err)
 	}
 
-	emptyGot := extractChangedLockfiles("diff --git a/main.go b/main.go\n+new\ndiff --git a/go.sum b/go.sum\n+sum\ndiff --git a/flake.lock b/flake.lock\n+lock")
-	if len(emptyGot) != 0 {
-		t.Errorf("extractChangedLockfiles() for unsupported lockfiles = %v, want empty", emptyGot)
+	// Verify that base tree files exist
+	if _, err := os.Stat(filepath.Join(tmpDir, "go.mod")); err != nil {
+		t.Errorf("expected go.mod to exist in extracted base tree: %v", err)
+	}
+
+	// Verify empty diff apply
+	if err := applyPatch(context.Background(), tmpDir, ""); err != nil {
+		t.Errorf("applyPatch() with empty diff failed: %v", err)
 	}
 }
 

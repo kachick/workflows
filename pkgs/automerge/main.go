@@ -76,8 +76,6 @@ type Config struct {
 type CommandRunner interface {
 	FetchOpenPRs(ctx context.Context) ([]PullRequest, error)
 	FetchPRDiff(ctx context.Context, number int) (string, error)
-	FetchBaseFile(ctx context.Context, baseRef, path string) ([]byte, error)
-	FetchPRFile(ctx context.Context, number int, path string) ([]byte, error)
 	EnsureLabel(ctx context.Context, name, description, color string) error
 	AddLabelToPR(ctx context.Context, number int, label string) error
 	MergePR(ctx context.Context, number int, method string) error
@@ -117,37 +115,6 @@ func (r *DefaultCommandRunner) FetchPRDiff(ctx context.Context, number int) (str
 	}
 
 	return stdout.String(), nil
-}
-
-func (r *DefaultCommandRunner) fetchFileContent(ctx context.Context, ref, path string) ([]byte, error) {
-	endpoint := fmt.Sprintf("/repos/{owner}/{repo}/contents/%s?ref=%s", path, ref)
-	cmd := exec.CommandContext(ctx, "gh", "api",
-		"-H", "Accept: application/vnd.github.raw+json",
-		endpoint,
-	)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if strings.Contains(stderr.String(), "HTTP 404") || strings.Contains(stdout.String(), `"status": "404"`) {
-			// File does not exist at the given ref
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to fetch %q at ref %q (%w): %s", path, ref, err, strings.TrimSpace(stderr.String()))
-	}
-	return stdout.Bytes(), nil
-}
-
-func (r *DefaultCommandRunner) FetchBaseFile(ctx context.Context, baseRef, path string) ([]byte, error) {
-	if baseRef == "" {
-		baseRef = "HEAD"
-	}
-	return r.fetchFileContent(ctx, baseRef, path)
-}
-
-func (r *DefaultCommandRunner) FetchPRFile(ctx context.Context, number int, path string) ([]byte, error) {
-	ref := fmt.Sprintf("pull/%d/head", number)
-	return r.fetchFileContent(ctx, ref, path)
 }
 
 func (r *DefaultCommandRunner) EnsureLabel(ctx context.Context, name, description, color string) error {
@@ -418,50 +385,6 @@ func filterEligible(prs []PullRequest, allowedBots []string) []PullRequest {
 	return eligible
 }
 
-var diffFileRegex = regexp.MustCompile(`(?m)^diff --git a/(\S+) b/(\S+)`)
-
-// Only include lockfiles natively extractable by `osv-scanner scan --lockfile=...`.
-// Why not flake.lock: OSV-Scanner does not support Nix flake.lock.
-// Why not go.sum: OSV-Scanner scans Go dependencies via go.mod; standalone go.sum fails extraction.
-// Why not bun.lockb: OSV-Scanner only supports text-based bun.lock, not binary bun.lockb.
-var supportedLockfileNames = map[string]bool{
-	"go.mod":            true,
-	"package-lock.json": true,
-	"yarn.lock":         true,
-	"pnpm-lock.yaml":    true,
-	"bun.lock":          true,
-	"Cargo.lock":        true,
-	"Gemfile.lock":      true,
-	"poetry.lock":       true,
-	"Pipfile.lock":      true,
-	"requirements.txt":  true,
-	"composer.lock":     true,
-	"mix.lock":          true,
-}
-
-func isSupportedLockfile(path string) bool {
-	base := filepath.Base(path)
-	return supportedLockfileNames[base]
-}
-
-func extractChangedLockfiles(diff string) []string {
-	matches := diffFileRegex.FindAllStringSubmatch(diff, -1)
-	seen := make(map[string]bool)
-	var lockfiles []string
-
-	for _, m := range matches {
-		if len(m) >= 3 {
-			filePath := m[2]
-			if isSupportedLockfile(filePath) && !seen[filePath] {
-				seen[filePath] = true
-				lockfiles = append(lockfiles, filePath)
-			}
-		}
-	}
-	sort.Strings(lockfiles)
-	return lockfiles
-}
-
 type VulnerabilityScanner interface {
 	ScanPR(ctx context.Context, pr PullRequest, diff string) (veto bool, reason string, err error)
 }
@@ -477,17 +400,34 @@ type osvScanOutput struct {
 }
 
 type OSVScanner struct {
-	Runner CommandRunner
+	baseDir     string
+	baseIDs     []string
+	baseScanned bool
 }
 
-func NewOSVScanner(runner CommandRunner) *OSVScanner {
-	return &OSVScanner{Runner: runner}
+func NewOSVScanner(baseDir string) *OSVScanner {
+	if baseDir == "" {
+		baseDir = "."
+	}
+	return &OSVScanner{baseDir: baseDir}
 }
 
 func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (bool, string, error) {
-	lockfiles := extractChangedLockfiles(diff)
-	if len(lockfiles) == 0 {
-		return false, "no lockfiles modified", nil
+	if !s.baseScanned {
+		dir := s.baseDir
+		if dir == "" || dir == "." {
+			root, err := findRepoRoot(ctx)
+			if err != nil {
+				return false, "", err
+			}
+			dir = root
+		}
+		ids, err := scanDirectory(ctx, dir)
+		if err != nil {
+			return false, "", fmt.Errorf("osv-scanner failed on base repository: %w", err)
+		}
+		s.baseIDs = ids
+		s.baseScanned = true
 	}
 
 	tmpDir, err := os.MkdirTemp("", "automerge-osv-*")
@@ -496,70 +436,108 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 	}
 	defer os.RemoveAll(tmpDir)
 
-	for _, lockfile := range lockfiles {
-		baseBytes, err := s.Runner.FetchBaseFile(ctx, pr.BaseRefName, lockfile)
-		if err != nil {
-			return false, "", fmt.Errorf("failed to fetch base file %q: %w", lockfile, err)
-		}
+	if err := extractBaseTree(ctx, tmpDir); err != nil {
+		return false, "", fmt.Errorf("failed to extract base tree: %w", err)
+	}
 
-		prBytes, err := s.Runner.FetchPRFile(ctx, pr.Number, lockfile)
-		if err != nil {
-			return false, "", fmt.Errorf("failed to fetch PR file %q: %w", lockfile, err)
-		}
+	if err := applyPatch(ctx, tmpDir, diff); err != nil {
+		return false, "", fmt.Errorf("failed to apply PR diff: %w", err)
+	}
 
-		// If the lockfile was deleted in PR, skip scanning
-		if len(prBytes) == 0 {
-			continue
-		}
+	prIDs, err := scanDirectory(ctx, tmpDir)
+	if err != nil {
+		return false, "", fmt.Errorf("osv-scanner failed on patched PR tree: %w", err)
+	}
 
-		baseIDs := make(map[string]bool)
-		if len(baseBytes) > 0 {
-			ids, err := scanLockfileContent(ctx, tmpDir, "base", lockfile, baseBytes)
-			if err != nil {
-				return false, "", fmt.Errorf("osv-scanner failed on base %q: %w", lockfile, err)
-			}
-			for _, id := range ids {
-				baseIDs[id] = true
-			}
-		}
+	baseSet := make(map[string]bool, len(s.baseIDs))
+	for _, id := range s.baseIDs {
+		baseSet[id] = true
+	}
 
-		prIDs, err := scanLockfileContent(ctx, tmpDir, "pr", lockfile, prBytes)
-		if err != nil {
-			return false, "", fmt.Errorf("osv-scanner failed on PR %q: %w", lockfile, err)
+	var newVulns []string
+	for _, id := range prIDs {
+		if !baseSet[id] {
+			newVulns = append(newVulns, id)
 		}
+	}
 
-		var newVulns []string
-		for _, id := range prIDs {
-			if !baseIDs[id] {
-				newVulns = append(newVulns, id)
-			}
-		}
-
-		if len(newVulns) > 0 {
-			sort.Strings(newVulns)
-			return true, fmt.Sprintf("new vulnerabilities introduced in %s: %s", lockfile, strings.Join(newVulns, ", ")), nil
-		}
+	if len(newVulns) > 0 {
+		sort.Strings(newVulns)
+		return true, fmt.Sprintf("new vulnerabilities introduced: %s", strings.Join(newVulns, ", ")), nil
 	}
 
 	return false, "no new vulnerabilities introduced", nil
 }
 
-func scanLockfileContent(ctx context.Context, tmpDir, prefix, lockfilePath string, content []byte) ([]string, error) {
-	targetDir := filepath.Join(tmpDir, prefix, filepath.Dir(lockfilePath))
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return nil, err
+func findRepoRoot(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to determine git repository root: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func extractBaseTree(ctx context.Context, destDir string) error {
+	repoRoot, err := findRepoRoot(ctx)
+	if err != nil {
+		return err
 	}
 
-	targetPath := filepath.Join(tmpDir, prefix, lockfilePath)
-	if err := os.WriteFile(targetPath, content, 0o600); err != nil {
-		return nil, err
+	archiveCmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "archive", "HEAD")
+	tarCmd := exec.CommandContext(ctx, "tar", "-x", "-C", destDir)
+
+	pr, pw := io.Pipe()
+	archiveCmd.Stdout = pw
+	tarCmd.Stdin = pr
+
+	var archiveErrBuf, tarErrBuf bytes.Buffer
+	archiveCmd.Stderr = &archiveErrBuf
+	tarCmd.Stderr = &tarErrBuf
+
+	if err := archiveCmd.Start(); err != nil {
+		pw.Close()
+		return fmt.Errorf("failed to start git archive: %w", err)
+	}
+	if err := tarCmd.Start(); err != nil {
+		pw.Close()
+		return fmt.Errorf("failed to start tar: %w", err)
 	}
 
-	args := []string{"scan", "--format=json", "--no-call-analysis=go"}
-	if _, err := os.Stat("osv-scanner.toml"); err == nil {
+	archiveErr := archiveCmd.Wait()
+	pw.Close()
+
+	tarErr := tarCmd.Wait()
+	pr.Close()
+
+	if archiveErr != nil {
+		return fmt.Errorf("git archive failed (%w): %s", archiveErr, strings.TrimSpace(archiveErrBuf.String()))
+	}
+	if tarErr != nil {
+		return fmt.Errorf("tar extract failed (%w): %s", tarErr, strings.TrimSpace(tarErrBuf.String()))
+	}
+	return nil
+}
+
+func applyPatch(ctx context.Context, targetDir, diff string) error {
+	cmd := exec.CommandContext(ctx, "git", "-C", targetDir, "apply", "--allow-empty", "-")
+	cmd.Stdin = strings.NewReader(diff)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to apply diff (%w): %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+func scanDirectory(ctx context.Context, dir string) ([]string, error) {
+	args := []string{"scan", "source", "-r", dir, "--format=json", "--no-call-analysis=go"}
+	configFile := filepath.Join(dir, "osv-scanner.toml")
+	if _, err := os.Stat(configFile); err == nil {
+		args = append(args, "--config="+configFile)
+	} else if _, err := os.Stat("osv-scanner.toml"); err == nil {
 		args = append(args, "--config=osv-scanner.toml")
 	}
-	args = append(args, "--lockfile="+targetPath)
 
 	cmd := exec.CommandContext(ctx, "osv-scanner", args...)
 	var stdout, stderr bytes.Buffer
@@ -887,7 +865,7 @@ func run(ctx context.Context, args []string) error {
 
 	var vulnScanner VulnerabilityScanner
 	if cfg.EnableOSVScanner {
-		vulnScanner = NewOSVScanner(runner)
+		vulnScanner = NewOSVScanner(".")
 	}
 
 	var reviewer LLMReviewer
