@@ -1,6 +1,6 @@
 # automerge
 
-Merge eligible bot pull requests on a schedule.
+Merge eligible bot pull requests via polling.
 
 ## Background & Motivation
 

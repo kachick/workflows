@@ -20,7 +20,7 @@ Personal collection of reusable GitHub Actions workflows.
 | :-------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | [nix-diff-closures](pkgs/nix-diff-closures/README.md)     | Post Nix package closure differences on pull requests when `flake.lock` changes |
 | [bump-flake-lock](pkgs/bump-flake-lock/README.md)         | Update `flake.lock`, run optional post-update command, and create pull request  |
-| [automerge](pkgs/automerge/README.md)                     | Merge eligible bot pull requests on schedule                                    |
+| [automerge](pkgs/automerge/README.md)                     | Merge eligible bot pull requests via polling                                    |
 | [betterleaks](.github/workflows/reusable-betterleaks.yml) | Scan secrets using upstream binary (temporary non-Nix workflow)                 |
 
 ## Repository Layout
