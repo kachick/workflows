@@ -26,7 +26,10 @@ var defaultAllowedBots = []string{
 	"samuebot[bot]",
 }
 
-var dependabotBumpRegex = regexp.MustCompile(`^Bump (?P<pkg>.+) from (?P<old>[^ ]+) to (?P<new>[^ ]+)(?: in .+)?$`)
+var (
+	dependabotBumpRegex   = regexp.MustCompile(`^Bump (?P<pkg>.+) from (?P<old>[^ ]+) to (?P<new>[^ ]+)(?: in .+)?$`)
+	renovateTableRowRegex = regexp.MustCompile(`(?m)^\|\s*(?:\[(?P<pkg>[^\]]+)\]\([^)]+\)|(?P<rawpkg>[^|]+?))\s*\|.*?` + "`(?P<old>[^`]+)`" + `\s*(?:→|->)\s*` + "`(?P<new>[^`]+)`")
+)
 
 const (
 	vetoLabelName        = "automerge:vetoed"
@@ -213,21 +216,7 @@ func extractVersionParts(v string) (major string, minor string) {
 	return major, minor
 }
 
-func checkDependabotBump(title string) (disallowed bool, reason string) {
-	matches := dependabotBumpRegex.FindStringSubmatch(title)
-	if matches == nil {
-		// Disallow group updates and unrecognized titles because their versions cannot be checked from the title.
-		return true, "unrecognized title format or group update"
-	}
-
-	pkgIndex := dependabotBumpRegex.SubexpIndex("pkg")
-	oldIndex := dependabotBumpRegex.SubexpIndex("old")
-	newIndex := dependabotBumpRegex.SubexpIndex("new")
-
-	pkg := matches[pkgIndex]
-	oldVer := matches[oldIndex]
-	newVer := matches[newIndex]
-
+func checkVersionBump(pkg, oldVer, newVer string) (disallowed bool, reason string) {
 	// Allow major updates only for cachix because cachix releases major versions frequently.
 	if strings.Contains(pkg, "cachix") {
 		return false, "allowed cachix update"
@@ -249,6 +238,68 @@ func checkDependabotBump(title string) (disallowed bool, reason string) {
 		return true, fmt.Sprintf("major update (%s -> %s)", oldVer, newVer)
 	}
 
+	return false, "non-breaking update"
+}
+
+func checkDependabotBump(title string) (disallowed bool, reason string) {
+	matches := dependabotBumpRegex.FindStringSubmatch(title)
+	if matches == nil {
+		// Disallow group updates and unrecognized titles because their versions cannot be checked from the title.
+		return true, "unrecognized title format or group update"
+	}
+
+	pkgIndex := dependabotBumpRegex.SubexpIndex("pkg")
+	oldIndex := dependabotBumpRegex.SubexpIndex("old")
+	newIndex := dependabotBumpRegex.SubexpIndex("new")
+
+	pkg := matches[pkgIndex]
+	oldVer := matches[oldIndex]
+	newVer := matches[newIndex]
+
+	return checkVersionBump(pkg, oldVer, newVer)
+}
+
+// checkRenovateBump parses the Renovate PR body table to extract package version changes.
+// Renovate default PR titles omit the source version (e.g. "Update dependency foo to v1.2.3"),
+// so inspecting the PR body table is required to distinguish breaking changes from minor updates.
+func checkRenovateBump(body string) (disallowed bool, reason string) {
+	content := body
+	// Stop before release notes or horizontal rule to avoid matching tables inside changelogs.
+	for _, marker := range []string{"\n---", "<details>", "### Release Notes"} {
+		if idx := strings.Index(content, marker); idx != -1 {
+			content = content[:idx]
+		}
+	}
+
+	matches := renovateTableRowRegex.FindAllStringSubmatch(content, -1)
+	if len(matches) == 0 {
+		return true, "unrecognized body format or no update rows found"
+	}
+
+	pkgIndex := renovateTableRowRegex.SubexpIndex("pkg")
+	rawpkgIndex := renovateTableRowRegex.SubexpIndex("rawpkg")
+	oldIndex := renovateTableRowRegex.SubexpIndex("old")
+	newIndex := renovateTableRowRegex.SubexpIndex("new")
+
+	lastReason := "non-breaking update"
+	for _, match := range matches {
+		pkg := match[pkgIndex]
+		if pkg == "" {
+			pkg = strings.TrimSpace(match[rawpkgIndex])
+		}
+		oldVer := match[oldIndex]
+		newVer := match[newIndex]
+
+		disallowed, reason := checkVersionBump(pkg, oldVer, newVer)
+		if disallowed {
+			return true, reason
+		}
+		lastReason = reason
+	}
+
+	if len(matches) == 1 {
+		return false, lastReason
+	}
 	return false, "non-breaking update"
 }
 
@@ -298,6 +349,11 @@ func checkEligibility(pr PullRequest, allowedBots []string) (bool, string) {
 	if strings.Contains(pr.Author.Login, "dependabot") {
 		if disallowed, reason := checkDependabotBump(pr.Title); disallowed {
 			return false, fmt.Sprintf("disallowed dependabot bump: %s", reason)
+		}
+	}
+	if strings.Contains(pr.Author.Login, "renovate") {
+		if disallowed, reason := checkRenovateBump(pr.Body); disallowed {
+			return false, fmt.Sprintf("disallowed renovate bump: %s", reason)
 		}
 	}
 

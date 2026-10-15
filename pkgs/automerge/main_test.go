@@ -155,6 +155,8 @@ func TestIsDisallowedDependabotMajor(t *testing.T) {
 	}
 }
 
+const validRenovateBody = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [foo](https://example.com) | minor | `1.0.0` -> `1.1.0` |\n"
+
 func TestIsEligible(t *testing.T) {
 	validChecks := []StatusCheckItem{
 		{Status: "COMPLETED", Conclusion: "SUCCESS"},
@@ -164,6 +166,7 @@ func TestIsEligible(t *testing.T) {
 	basePR := PullRequest{
 		Number:            1,
 		Title:             "Update dependency",
+		Body:              validRenovateBody,
 		Author:            Author{Login: "renovate[bot]"},
 		IsDraft:           false,
 		Mergeable:         "MERGEABLE",
@@ -303,6 +306,30 @@ func TestIsEligible(t *testing.T) {
 	if !isEligible(dependabotCachixPR, defaultAllowedBots) {
 		t.Errorf("Dependabot cachix major bump should be eligible")
 	}
+
+	// Renovate major bump (disallowed)
+	renovateMajorPR := basePR
+	renovateMajorPR.Author.Login = "renovate[bot]"
+	renovateMajorPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [actions/checkout](https://example.com) | major | `3.0.0` -> `4.0.0` |\n"
+	if isEligible(renovateMajorPR, defaultAllowedBots) {
+		t.Errorf("Renovate major bump should not be eligible")
+	}
+
+	// Renovate 0.x minor bump (eligible)
+	renovate0xPR := basePR
+	renovate0xPR.Author.Login = "renovate[bot]"
+	renovate0xPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [dprint/dprint-plugin-markdown](https://example.com) | minor | `0.24.0` → `0.26.0` |\n"
+	if !isEligible(renovate0xPR, defaultAllowedBots) {
+		t.Errorf("Renovate 0.x bump should be eligible")
+	}
+
+	// Renovate unrecognized body (disallowed)
+	renovateInvalidBodyPR := basePR
+	renovateInvalidBodyPR.Author.Login = "renovate[bot]"
+	renovateInvalidBodyPR.Body = "Unrecognized body without table"
+	if isEligible(renovateInvalidBodyPR, defaultAllowedBots) {
+		t.Errorf("Renovate unrecognized body should not be eligible")
+	}
 }
 
 type mockRunner struct {
@@ -381,6 +408,7 @@ func TestExecute(t *testing.T) {
 			{
 				Number:            101,
 				Title:             "Renovate PR",
+				Body:              validRenovateBody,
 				Author:            Author{Login: "renovate[bot]"},
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
@@ -388,6 +416,7 @@ func TestExecute(t *testing.T) {
 			{
 				Number:            102,
 				Title:             "Draft PR",
+				Body:              validRenovateBody,
 				Author:            Author{Login: "renovate[bot]"},
 				IsDraft:           true,
 				Mergeable:         "MERGEABLE",
@@ -440,6 +469,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 		{
 			Number:            201,
 			Title:             "Safe renovate PR",
+			Body:              validRenovateBody,
 			Author:            Author{Login: "renovate[bot]"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
@@ -447,6 +477,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 		{
 			Number:            202,
 			Title:             "Breaking renovate PR",
+			Body:              validRenovateBody,
 			Author:            Author{Login: "renovate[bot]"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
@@ -454,6 +485,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 		{
 			Number:            203,
 			Title:             "Flaky API renovate PR",
+			Body:              validRenovateBody,
 			Author:            Author{Login: "renovate[bot]"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
@@ -461,6 +493,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 		{
 			Number:            204,
 			Title:             "Diff error renovate PR",
+			Body:              validRenovateBody,
 			Author:            Author{Login: "renovate[bot]"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
@@ -525,6 +558,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 		{
 			Number:            202,
 			Title:             "Breaking renovate PR",
+			Body:              validRenovateBody,
 			Author:            Author{Login: "renovate[bot]"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
@@ -553,6 +587,7 @@ func TestExecuteLLMVetoMissingAPIKey(t *testing.T) {
 			{
 				Number:            301,
 				Title:             "Renovate PR",
+				Body:              validRenovateBody,
 				Author:            Author{Login: "renovate[bot]"},
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
@@ -761,6 +796,7 @@ func TestCheckEligibility(t *testing.T) {
 	basePR := PullRequest{
 		Number:            1,
 		Title:             "Update dependency",
+		Body:              validRenovateBody,
 		Author:            Author{Login: "renovate[bot]"},
 		IsDraft:           false,
 		Mergeable:         "MERGEABLE",
@@ -777,6 +813,13 @@ func TestCheckEligibility(t *testing.T) {
 	dependabot0xPR.Title = "Bump golang.org/x/sys from 0.48.0 to 0.49.0"
 	if ok, reason := checkEligibility(dependabot0xPR, defaultAllowedBots); !ok {
 		t.Fatalf("expected dependabot 0.x bump to be eligible, got reason=%q", reason)
+	}
+
+	renovate0xPR := basePR
+	renovate0xPR.Author.Login = "renovate[bot]"
+	renovate0xPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [dprint/dprint-plugin-markdown](https://example.com) | minor | `0.24.0` → `0.26.0` |\n"
+	if ok, reason := checkEligibility(renovate0xPR, defaultAllowedBots); !ok {
+		t.Fatalf("expected renovate 0.x bump to be eligible, got reason=%q", reason)
 	}
 
 	tests := []struct {
@@ -839,6 +882,22 @@ func TestCheckEligibility(t *testing.T) {
 			wantReason: "disallowed dependabot bump: major update (3.0.0 -> 4.0.0)",
 		},
 		{
+			name: "renovate major update",
+			modify: func(pr *PullRequest) {
+				pr.Author.Login = "renovate[bot]"
+				pr.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [actions/checkout](https://example.com) | major | `3.0.0` -> `4.0.0` |\n"
+			},
+			wantReason: "disallowed renovate bump: major update (3.0.0 -> 4.0.0)",
+		},
+		{
+			name: "renovate unrecognized body",
+			modify: func(pr *PullRequest) {
+				pr.Author.Login = "renovate[bot]"
+				pr.Body = "Unrecognized body without table"
+			},
+			wantReason: "disallowed renovate bump: unrecognized body format or no update rows found",
+		},
+		{
 			name: "veto label exists",
 			modify: func(pr *PullRequest) {
 				pr.Labels = []Label{{Name: vetoLabelName}}
@@ -857,6 +916,100 @@ func TestCheckEligibility(t *testing.T) {
 			}
 			if reason != tc.wantReason {
 				t.Errorf("checkEligibility() reason = %q, want %q", reason, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestCheckRenovateBump(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		disallowed bool
+		wantReason string
+	}{
+		{
+			name:       "minor update with arrow",
+			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [dprint/dprint-plugin-markdown](https://example.com) | minor | `0.24.0` → `0.26.0` |\n",
+			disallowed: false,
+			wantReason: "allowed 0.x or initial stable release",
+		},
+		{
+			name:       "minor update with ascii arrow",
+			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [kachick/renovate-config-dprint](https://example.com) | minor | `1.1.0` -> `1.3.0` |\n",
+			disallowed: false,
+			wantReason: "non-breaking update",
+		},
+		{
+			name:       "patch update",
+			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [dprint/dprint-plugin-json](https://example.com) | patch | `0.25.0` → `0.25.2` |\n",
+			disallowed: false,
+			wantReason: "allowed 0.x or initial stable release",
+		},
+		{
+			name:       "major update",
+			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [actions/checkout](https://example.com) | major | `3.0.0` → `4.0.0` |\n",
+			disallowed: true,
+			wantReason: "major update (3.0.0 -> 4.0.0)",
+		},
+		{
+			name:       "0.x to 1.x update",
+			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [foo](https://example.com) | major | `0.9.0` → `1.0.0` |\n",
+			disallowed: false,
+			wantReason: "allowed 0.x or initial stable release",
+		},
+		{
+			name:       "0.x to 2.x update",
+			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [foo](https://example.com) | major | `0.1.0` → `2.0.0` |\n",
+			disallowed: true,
+			wantReason: "major update (0.1.0 -> 2.0.0)",
+		},
+		{
+			name:       "cachix major update",
+			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [cachix/cachix-action](https://example.com) | major | `14` → `15` |\n",
+			disallowed: false,
+			wantReason: "allowed cachix update",
+		},
+		{
+			name:       "unlinked package name",
+			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| foo | patch | `1.0.0` -> `1.0.1` |\n",
+			disallowed: false,
+			wantReason: "non-breaking update",
+		},
+		{
+			name:       "group update all allowed",
+			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [foo](https://example.com) | minor | `1.0.0` -> `1.1.0` |\n| [bar](https://example.com) | patch | `2.0.0` -> `2.0.1` |\n",
+			disallowed: false,
+			wantReason: "non-breaking update",
+		},
+		{
+			name:       "group update with one major disallowed",
+			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [foo](https://example.com) | minor | `1.0.0` -> `1.1.0` |\n| [bar](https://example.com) | major | `1.0.0` -> `2.0.0` |\n",
+			disallowed: true,
+			wantReason: "major update (1.0.0 -> 2.0.0)",
+		},
+		{
+			name:       "ignores tables in release notes section",
+			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [foo](https://example.com) | patch | `1.0.0` -> `1.0.1` |\n\n---\n\n### Release Notes\n\n<details>\n| Other | Update | Change |\n|---|---|---|\n| [broken](https://example.com) | major | `1.0.0` -> `9.0.0` |\n</details>\n",
+			disallowed: false,
+			wantReason: "non-breaking update",
+		},
+		{
+			name:       "unrecognized body format",
+			body:       "Lock file maintenance updates",
+			disallowed: true,
+			wantReason: "unrecognized body format or no update rows found",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			disallowed, reason := checkRenovateBump(tc.body)
+			if disallowed != tc.disallowed {
+				t.Errorf("checkRenovateBump() disallowed = %v, want %v", disallowed, tc.disallowed)
+			}
+			if reason != tc.wantReason {
+				t.Errorf("checkRenovateBump() reason = %q, want %q", reason, tc.wantReason)
 			}
 		})
 	}
