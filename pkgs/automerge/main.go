@@ -619,6 +619,7 @@ type geminiSchema struct {
 	Type       string                   `json:"type"`
 	Properties map[string]*geminiSchema `json:"properties,omitempty"`
 	Required   []string                 `json:"required,omitempty"`
+	Items      *geminiSchema            `json:"items,omitempty"`
 }
 
 type geminiGenerationConfig struct {
@@ -650,6 +651,44 @@ type vetoDecision struct {
 	Reason string `json:"reason"`
 }
 
+type geminiFinding struct {
+	Severity    string `json:"severity"`
+	Category    string `json:"category"`
+	Description string `json:"description"`
+}
+
+type geminiReviewReport struct {
+	RiskLevel string          `json:"risk_level"`
+	Summary   string          `json:"summary"`
+	Findings  []geminiFinding `json:"findings"`
+}
+
+func evaluateGeminiReport(report geminiReviewReport) (bool, string) {
+	var criticalOrHighFindings []string
+	for _, f := range report.Findings {
+		sev := strings.ToUpper(strings.TrimSpace(f.Severity))
+		if sev == "CRITICAL" || sev == "HIGH" {
+			criticalOrHighFindings = append(criticalOrHighFindings, fmt.Sprintf("[%s] %s: %s", sev, f.Category, f.Description))
+		}
+	}
+
+	risk := strings.ToUpper(strings.TrimSpace(report.RiskLevel))
+	if risk == "CRITICAL" || risk == "HIGH" || len(criticalOrHighFindings) > 0 {
+		if len(criticalOrHighFindings) > 0 {
+			return true, strings.Join(criticalOrHighFindings, "; ")
+		}
+		if report.Summary != "" {
+			return true, fmt.Sprintf("[%s] %s", risk, report.Summary)
+		}
+		return true, fmt.Sprintf("high risk level detected: %s", risk)
+	}
+
+	if report.Summary != "" {
+		return false, report.Summary
+	}
+	return false, fmt.Sprintf("risk level: %s", report.RiskLevel)
+}
+
 func (g *GeminiReviewer) ReviewPR(ctx context.Context, pr PullRequest, diff string) (bool, string, error) {
 	if g.APIKey == "" {
 		return false, "", errors.New("GEMINI_API_KEY is empty")
@@ -658,21 +697,28 @@ func (g *GeminiReviewer) ReviewPR(ctx context.Context, pr PullRequest, diff stri
 	truncatedBody := truncateText(pr.Body, maxBodyLength)
 	truncatedDiff := truncateText(diff, maxDiffLength)
 
-	prompt := fmt.Sprintf(`You are a senior security and compatibility reviewer acting as the final veto gatekeeper for an automated pull request merge bot.
-The pull request is already eligible according to all automated CI tests and bot filters.
+	// Why not ask Gemini to decide veto directly ("default must be pass"):
+	// 1. Avoid push to pass: Strong words like "default must be pass" or "unequivocally met"
+	//    make the model too shy. It can easily miss clever attacks or grey-zone breaking changes.
+	// 2. Avoid meta context bias: Telling the model "CI already passed" or "you are the final gatekeeper"
+	//    gives strong bias that the PR is safe, hurting objective review.
+	// Keep Gemini focused only on finding risks with severity. Let Go code make the final veto call.
+	prompt := fmt.Sprintf(`You are a senior security and software compatibility reviewer.
+Analyze the pull request changes for security risks and critical breaking changes.
 
-Your task: Decide whether to VETO (reject/block) the merge.
-Your default decision MUST be PASS (veto: false).
+Focus areas:
+1. Malicious Code and Supply Chain Risks:
+   - Obfuscated code, suspicious binary payloads, or odd scripts.
+   - Unexpected network requests, external downloads, or reverse shells.
+   - Stealing secrets, tokens, or environment variables.
+   - Suspicious dependency changes (e.g. typosquatting, unverified source repos).
+2. Critical Breaking Changes:
+   - Unannounced major API removals or severe incompatibilities that will break consumers.
 
-STRICT VETO CRITERIA (Only set veto: true if at least one of these is unequivocally met):
-1. Malicious Code or Supply Chain Attack: Diff introduces unexpected obfuscated code, suspicious network requests to external domains, exfiltration of environment variables/secrets, or suspicious dependency swapping (e.g. typosquatting).
-2. Critical Breaking Changes: The PR description (release notes/changelog) or diff explicitly indicates an unannounced breaking change, removed major API, or severe incompatibility that will break the consumer.
-
-DO NOT VETO (MUST set veto: false) for:
-- Minor updates, patch updates, or backward-compatible feature additions.
-- Deprecation warnings (as long as functionality is not yet completely broken).
-- Code style, formatting, missing tests, or documentation nitpicks.
-- Normal bot updates (e.g. Dependabot bumping a minor or patch dependency version).
+Harmless changes (low or no risk):
+- Standard version bumps (patch or minor) from known package managers.
+- Routine dependency updates, formatting, or documentation fixes.
+- Deprecation notices where existing functionality is preserved.
 
 Pull Request Title: %s
 Author: %s
@@ -697,10 +743,22 @@ Code Diff:
 			ResponseSchema: &geminiSchema{
 				Type: "OBJECT",
 				Properties: map[string]*geminiSchema{
-					"veto":   {Type: "BOOLEAN"},
-					"reason": {Type: "STRING"},
+					"risk_level": {Type: "STRING"},
+					"summary":    {Type: "STRING"},
+					"findings": {
+						Type: "ARRAY",
+						Items: &geminiSchema{
+							Type: "OBJECT",
+							Properties: map[string]*geminiSchema{
+								"severity":    {Type: "STRING"},
+								"category":    {Type: "STRING"},
+								"description": {Type: "STRING"},
+							},
+							Required: []string{"severity", "category", "description"},
+						},
+					},
 				},
-				Required: []string{"veto", "reason"},
+				Required: []string{"risk_level", "summary", "findings"},
 			},
 		},
 	}
@@ -746,12 +804,13 @@ Code Diff:
 	}
 
 	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
-	var decision vetoDecision
-	if err := json.Unmarshal([]byte(responseText), &decision); err != nil {
-		return false, "", fmt.Errorf("failed to parse decision json (%q): %w", responseText, err)
+	var report geminiReviewReport
+	if err := json.Unmarshal([]byte(responseText), &report); err != nil {
+		return false, "", fmt.Errorf("failed to parse review report json (%q): %w", responseText, err)
 	}
 
-	return decision.Veto, decision.Reason, nil
+	veto, reason := evaluateGeminiReport(report)
+	return veto, reason, nil
 }
 
 func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LLMReviewer, vulnScanner VulnerabilityScanner) error {

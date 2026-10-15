@@ -633,6 +633,80 @@ func TestExecuteLLMVetoMissingAPIKey(t *testing.T) {
 	}
 }
 
+func TestEvaluateGeminiReport(t *testing.T) {
+	tests := []struct {
+		name       string
+		report     geminiReviewReport
+		wantVeto   bool
+		wantReason string
+	}{
+		{
+			name: "low risk without findings passes",
+			report: geminiReviewReport{
+				RiskLevel: "LOW",
+				Summary:   "routine patch update",
+				Findings:  []geminiFinding{},
+			},
+			wantVeto:   false,
+			wantReason: "routine patch update",
+		},
+		{
+			name: "medium findings pass with summary",
+			report: geminiReviewReport{
+				RiskLevel: "MEDIUM",
+				Summary:   "deprecation warning in comments",
+				Findings: []geminiFinding{
+					{
+						Severity:    "MEDIUM",
+						Category:    "deprecation",
+						Description: "deprecated function used",
+					},
+				},
+			},
+			wantVeto:   false,
+			wantReason: "deprecation warning in comments",
+		},
+		{
+			name: "critical risk level triggers veto",
+			report: geminiReviewReport{
+				RiskLevel: "CRITICAL",
+				Summary:   "unannounced core package replacement",
+				Findings:  []geminiFinding{},
+			},
+			wantVeto:   true,
+			wantReason: "[CRITICAL] unannounced core package replacement",
+		},
+		{
+			name: "high finding triggers veto and reports details",
+			report: geminiReviewReport{
+				RiskLevel: "LOW",
+				Summary:   "mostly fine but suspicious network call",
+				Findings: []geminiFinding{
+					{
+						Severity:    "HIGH",
+						Category:    "suspicious_network",
+						Description: "exfiltrates env vars to external domain",
+					},
+				},
+			},
+			wantVeto:   true,
+			wantReason: "[HIGH] suspicious_network: exfiltrates env vars to external domain",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotVeto, gotReason := evaluateGeminiReport(tt.report)
+			if gotVeto != tt.wantVeto {
+				t.Errorf("evaluateGeminiReport() gotVeto = %v, want %v", gotVeto, tt.wantVeto)
+			}
+			if gotReason != tt.wantReason {
+				t.Errorf("evaluateGeminiReport() gotReason = %q, want %q", gotReason, tt.wantReason)
+			}
+		})
+	}
+}
+
 func TestGeminiReviewerHTTP(t *testing.T) {
 	t.Run("successful approval", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -650,7 +724,7 @@ func TestGeminiReviewerHTTP(t *testing.T) {
 						"content": {
 							"parts": [
 								{
-									"text": "{\"veto\": false, \"reason\": \"safe patch update\"}"
+									"text": "{\"risk_level\": \"LOW\", \"summary\": \"safe patch update\", \"findings\": []}"
 								}
 							]
 						}
@@ -696,7 +770,7 @@ func TestGeminiReviewerHTTP(t *testing.T) {
 						"content": {
 							"parts": [
 								{
-									"text": "{\"veto\": true, \"reason\": \"breaking change detected\"}"
+									"text": "{\"risk_level\": \"HIGH\", \"summary\": \"breaking change detected\", \"findings\": [{\"severity\": \"HIGH\", \"category\": \"breaking_change\", \"description\": \"removed foo()\"}]}"
 								}
 							]
 						}
@@ -727,8 +801,8 @@ func TestGeminiReviewerHTTP(t *testing.T) {
 		if !veto {
 			t.Errorf("expected veto true, got false")
 		}
-		if reason != "breaking change detected" {
-			t.Errorf("expected reason 'breaking change detected', got %q", reason)
+		if reason != "[HIGH] breaking_change: removed foo()" {
+			t.Errorf("expected reason '[HIGH] breaking_change: removed foo()', got %q", reason)
 		}
 	})
 

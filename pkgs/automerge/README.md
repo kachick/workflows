@@ -32,7 +32,7 @@ Accepting a short schedule delay (such as checking every two hours instead of li
   - Compares base and PR dependencies to block only newly introduced vulnerabilities. If existing vulnerabilities remain unchanged during an intermediate version bump, the PR safely passes without false positives.
   - Vetoing known vulnerabilities before invoking the LLM completely avoids spending API tokens on vulnerable pull requests.
 - **Why LLM review acts only as a final veto gatekeeper**:
-  - LLM review acts strictly as a negative veto filter (default: pass) right before merging. It catches malicious code or critical breaking changes without stopping on style or test nitpicks. It never bypasses CI checks or allows ineligible pull requests to merge.
+  - LLM review acts strictly as a negative veto filter right before merging. Gemini inspects the diff and PR description for security risks and breaking changes with severity levels, and code logic decides whether to veto the merge. It never bypasses CI checks or allows ineligible pull requests to merge.
   - When vetoed, the workflow automatically tags the pull request with an `automerge:vetoed` label. Subsequent scheduled runs skip the labeled pull request immediately without spending API tokens. If a human reviewer decides to allow it, simply removing the label will re-enable automatic merging on the next run.
   - When the API key is missing or the API request fails, the merge is safely skipped for the next scheduled run rather than failing the whole workflow.
 
