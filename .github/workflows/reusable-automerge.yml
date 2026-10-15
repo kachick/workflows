@@ -27,6 +27,11 @@ on:
         required: false
         type: string
         default: 'gemini-flash-latest'
+      enable-osv-scanner:
+        description: 'Enable OSV-Scanner diff check before merging'
+        required: false
+        type: boolean
+        default: true
     secrets:
       APP_PRIVATE_KEY:
         description: 'GitHub App private key'
@@ -74,6 +79,7 @@ jobs:
           LLM_FINAL_VETO: ${{ inputs.llm-final-veto }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ inputs.gemini-model }}
+          ENABLE_OSV_SCANNER: ${{ inputs.enable-osv-scanner }}
         run: |
           set -euo pipefail
 
@@ -87,4 +93,5 @@ jobs:
             --merge-method="${MERGE_METHOD}" \
             --allowed-bots="${ALLOWED_BOTS}" \
             --llm-final-veto="${LLM_FINAL_VETO}" \
-            --gemini-model="${GEMINI_MODEL}"
+            --gemini-model="${GEMINI_MODEL}" \
+            --enable-osv-scanner="${ENABLE_OSV_SCANNER}"

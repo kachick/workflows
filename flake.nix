@@ -66,6 +66,7 @@
                 typos
                 shellcheck
                 zizmor
+                osv-scanner
               ]
             );
           };

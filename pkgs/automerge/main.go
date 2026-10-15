@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -62,16 +64,19 @@ type StatusCheckItem struct {
 }
 
 type Config struct {
-	AllowedBots  []string
-	MergeMethod  string
-	LLMFinalVeto bool
-	GeminiAPIKey string
-	GeminiModel  string
+	AllowedBots      []string
+	MergeMethod      string
+	LLMFinalVeto     bool
+	GeminiAPIKey     string
+	GeminiModel      string
+	EnableOSVScanner bool
 }
 
 type CommandRunner interface {
 	FetchOpenPRs(ctx context.Context) ([]PullRequest, error)
 	FetchPRDiff(ctx context.Context, number int) (string, error)
+	FetchBaseFile(ctx context.Context, path string) ([]byte, error)
+	FetchPRFile(ctx context.Context, number int, path string) ([]byte, error)
 	EnsureLabel(ctx context.Context, name, description, color string) error
 	AddLabelToPR(ctx context.Context, number int, label string) error
 	MergePR(ctx context.Context, number int, method string) error
@@ -111,6 +116,33 @@ func (r *DefaultCommandRunner) FetchPRDiff(ctx context.Context, number int) (str
 	}
 
 	return stdout.String(), nil
+}
+
+func (r *DefaultCommandRunner) FetchBaseFile(ctx context.Context, path string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", "show", "HEAD:"+path)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		// File did not exist in base branch
+		return nil, nil
+	}
+	return stdout.Bytes(), nil
+}
+
+func (r *DefaultCommandRunner) FetchPRFile(ctx context.Context, number int, path string) ([]byte, error) {
+	fetchCmd := exec.CommandContext(ctx, "git", "fetch", "origin", fmt.Sprintf("pull/%d/head", number))
+	if err := fetchCmd.Run(); err != nil {
+		return nil, fmt.Errorf("failed to git fetch pr %d: %w", number, err)
+	}
+
+	showCmd := exec.CommandContext(ctx, "git", "show", "FETCH_HEAD:"+path)
+	var stdout bytes.Buffer
+	showCmd.Stdout = &stdout
+	if err := showCmd.Run(); err != nil {
+		// File does not exist in PR branch
+		return nil, nil
+	}
+	return stdout.Bytes(), nil
 }
 
 func (r *DefaultCommandRunner) EnsureLabel(ctx context.Context, name, description, color string) error {
@@ -174,6 +206,7 @@ func parseConfig(args []string) (*Config, error) {
 	fs.BoolVar(&cfg.LLMFinalVeto, "llm-final-veto", false, "Enable LLM final veto review before merging")
 	fs.StringVar(&cfg.GeminiAPIKey, "gemini-api-key", "", "Gemini API key for LLM final veto")
 	fs.StringVar(&cfg.GeminiModel, "gemini-model", "gemini-flash-latest", "Gemini model name for LLM final veto")
+	fs.BoolVar(&cfg.EnableOSVScanner, "enable-osv-scanner", true, "Enable OSV-Scanner diff check before merging")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -195,6 +228,11 @@ func parseConfig(args []string) (*Config, error) {
 	}
 	if env := os.Getenv("GEMINI_MODEL"); env != "" && cfg.GeminiModel == "gemini-flash-latest" {
 		cfg.GeminiModel = env
+	}
+	if env := os.Getenv("ENABLE_OSV_SCANNER"); env != "" {
+		if val, err := strconv.ParseBool(env); err == nil {
+			cfg.EnableOSVScanner = val
+		}
 	}
 
 	validMethods := map[string]bool{"squash": true, "merge": true, "rebase": true}
@@ -373,6 +411,179 @@ func filterEligible(prs []PullRequest, allowedBots []string) []PullRequest {
 		}
 	}
 	return eligible
+}
+
+var diffFileRegex = regexp.MustCompile(`(?m)^diff --git a/(\S+) b/(\S+)`)
+
+var supportedLockfileNames = map[string]bool{
+	"go.mod":            true,
+	"go.sum":            true,
+	"package-lock.json": true,
+	"yarn.lock":         true,
+	"pnpm-lock.yaml":    true,
+	"bun.lock":          true,
+	"bun.lockb":         true,
+	"Cargo.lock":        true,
+	"Gemfile.lock":      true,
+	"poetry.lock":       true,
+	"Pipfile.lock":      true,
+	"requirements.txt":  true,
+	"flake.lock":        true,
+	"composer.lock":     true,
+	"mix.lock":          true,
+}
+
+func isSupportedLockfile(path string) bool {
+	base := filepath.Base(path)
+	return supportedLockfileNames[base]
+}
+
+func extractChangedLockfiles(diff string) []string {
+	matches := diffFileRegex.FindAllStringSubmatch(diff, -1)
+	seen := make(map[string]bool)
+	var lockfiles []string
+
+	for _, m := range matches {
+		if len(m) >= 3 {
+			filePath := m[2]
+			if isSupportedLockfile(filePath) && !seen[filePath] {
+				seen[filePath] = true
+				lockfiles = append(lockfiles, filePath)
+			}
+		}
+	}
+	sort.Strings(lockfiles)
+	return lockfiles
+}
+
+type VulnerabilityScanner interface {
+	ScanPR(ctx context.Context, pr PullRequest, diff string) (veto bool, reason string, err error)
+}
+
+type osvScanOutput struct {
+	Results []struct {
+		Packages []struct {
+			Vulnerabilities []struct {
+				ID string `json:"id"`
+			} `json:"vulnerabilities"`
+		} `json:"packages"`
+	} `json:"results"`
+}
+
+type OSVScanner struct {
+	Runner CommandRunner
+}
+
+func NewOSVScanner(runner CommandRunner) *OSVScanner {
+	return &OSVScanner{Runner: runner}
+}
+
+func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (bool, string, error) {
+	lockfiles := extractChangedLockfiles(diff)
+	if len(lockfiles) == 0 {
+		return false, "no lockfiles modified", nil
+	}
+
+	tmpDir, err := os.MkdirTemp("", "automerge-osv-*")
+	if err != nil {
+		return false, "", fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	for _, lockfile := range lockfiles {
+		baseBytes, err := s.Runner.FetchBaseFile(ctx, lockfile)
+		if err != nil {
+			return false, "", fmt.Errorf("failed to fetch base file %q: %w", lockfile, err)
+		}
+
+		prBytes, err := s.Runner.FetchPRFile(ctx, pr.Number, lockfile)
+		if err != nil {
+			return false, "", fmt.Errorf("failed to fetch PR file %q: %w", lockfile, err)
+		}
+
+		// If the lockfile was deleted in PR, skip scanning
+		if len(prBytes) == 0 {
+			continue
+		}
+
+		baseIDs := make(map[string]bool)
+		if len(baseBytes) > 0 {
+			ids, err := scanLockfileContent(ctx, tmpDir, "base", lockfile, baseBytes)
+			if err != nil {
+				return false, "", fmt.Errorf("osv-scanner failed on base %q: %w", lockfile, err)
+			}
+			for _, id := range ids {
+				baseIDs[id] = true
+			}
+		}
+
+		prIDs, err := scanLockfileContent(ctx, tmpDir, "pr", lockfile, prBytes)
+		if err != nil {
+			return false, "", fmt.Errorf("osv-scanner failed on PR %q: %w", lockfile, err)
+		}
+
+		var newVulns []string
+		for _, id := range prIDs {
+			if !baseIDs[id] {
+				newVulns = append(newVulns, id)
+			}
+		}
+
+		if len(newVulns) > 0 {
+			sort.Strings(newVulns)
+			return true, fmt.Sprintf("new vulnerabilities introduced in %s: %s", lockfile, strings.Join(newVulns, ", ")), nil
+		}
+	}
+
+	return false, "no new vulnerabilities introduced", nil
+}
+
+func scanLockfileContent(ctx context.Context, tmpDir, prefix, lockfilePath string, content []byte) ([]string, error) {
+	targetDir := filepath.Join(tmpDir, prefix, filepath.Dir(lockfilePath))
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return nil, err
+	}
+
+	targetPath := filepath.Join(tmpDir, prefix, lockfilePath)
+	if err := os.WriteFile(targetPath, content, 0o600); err != nil {
+		return nil, err
+	}
+
+	args := []string{"scan", "--format=json", "--no-call-analysis=go"}
+	if _, err := os.Stat("osv-scanner.toml"); err == nil {
+		args = append(args, "--config=osv-scanner.toml")
+	}
+	args = append(args, "--lockfile="+targetPath)
+
+	cmd := exec.CommandContext(ctx, "osv-scanner", args...)
+	output, err := cmd.Output()
+	// osv-scanner exits with status 1 when vulnerabilities are found, but still produces valid JSON.
+	if err != nil && len(output) == 0 {
+		return nil, fmt.Errorf("osv-scanner command failed: %w", err)
+	}
+
+	var scanOut osvScanOutput
+	if err := json.Unmarshal(output, &scanOut); err != nil {
+		return nil, fmt.Errorf("failed to parse osv-scanner json output: %w", err)
+	}
+
+	idSet := make(map[string]bool)
+	for _, res := range scanOut.Results {
+		for _, pkg := range res.Packages {
+			for _, vuln := range pkg.Vulnerabilities {
+				if vuln.ID != "" {
+					idSet[vuln.ID] = true
+				}
+			}
+		}
+	}
+
+	var ids []string
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids, nil
 }
 
 const (
@@ -556,7 +767,7 @@ Code Diff:
 	return decision.Veto, decision.Reason, nil
 }
 
-func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LLMReviewer) error {
+func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LLMReviewer, vulnScanner VulnerabilityScanner) error {
 	prs, err := runner.FetchOpenPRs(ctx)
 	if err != nil {
 		return err
@@ -584,6 +795,34 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 	}
 
 	for _, pr := range eligible {
+		diff, err := runner.FetchPRDiff(ctx, pr.Number)
+		if err != nil {
+			fmt.Printf("Warning: failed to fetch diff for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
+			continue
+		}
+
+		if vulnScanner != nil {
+			fmt.Printf("Running vulnerability diff scan for PR #%d (%s)...\n", pr.Number, pr.Title)
+			veto, reason, err := vulnScanner.ScanPR(ctx, pr, diff)
+			if err != nil {
+				fmt.Printf("Warning: vulnerability scan failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
+				continue
+			}
+
+			if veto {
+				fmt.Printf("PR #%d (%s): VETOED by vulnerability scan: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
+				if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
+					fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
+				}
+				if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
+					fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
+				}
+				continue
+			}
+
+			fmt.Printf("PR #%d (%s): vulnerability scan passed: %s.\n", pr.Number, pr.Title, reason)
+		}
+
 		if cfg.LLMFinalVeto {
 			if cfg.GeminiAPIKey == "" {
 				fmt.Printf("Warning: llm-final-veto is enabled, but GEMINI_API_KEY is not set. Skipping merge for PR #%d to avoid unreviewed merges.\n", pr.Number)
@@ -591,12 +830,6 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 			}
 
 			fmt.Printf("Running final veto review for PR #%d (%s)...\n", pr.Number, pr.Title)
-			diff, err := runner.FetchPRDiff(ctx, pr.Number)
-			if err != nil {
-				fmt.Printf("Warning: failed to fetch diff for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
-				continue
-			}
-
 			veto, reason, err := reviewer.ReviewPR(ctx, pr, diff)
 			if err != nil {
 				fmt.Printf("Warning: veto review failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
@@ -641,10 +874,17 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	runner := &DefaultCommandRunner{}
+
+	var vulnScanner VulnerabilityScanner
+	if cfg.EnableOSVScanner {
+		vulnScanner = NewOSVScanner(runner)
+	}
+
 	var reviewer LLMReviewer
 	if cfg.LLMFinalVeto {
 		reviewer = NewGeminiReviewer(cfg.GeminiAPIKey, cfg.GeminiModel)
 	}
 
-	return execute(ctx, cfg, &DefaultCommandRunner{}, reviewer)
+	return execute(ctx, cfg, runner, reviewer, vulnScanner)
 }

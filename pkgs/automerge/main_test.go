@@ -335,6 +335,8 @@ func TestIsEligible(t *testing.T) {
 type mockRunner struct {
 	prs           []PullRequest
 	diffs         map[int]string
+	baseFiles     map[string][]byte
+	prFiles       map[int]map[string][]byte
 	fetchErr      error
 	diffErrOn     map[int]error
 	ensuredLabels []string
@@ -358,6 +360,26 @@ func (m *mockRunner) FetchPRDiff(ctx context.Context, number int) (string, error
 		return diff, nil
 	}
 	return "diff --git a/go.mod b/go.mod\n+example", nil
+}
+
+func (m *mockRunner) FetchBaseFile(ctx context.Context, path string) ([]byte, error) {
+	if m.baseFiles != nil {
+		if content, ok := m.baseFiles[path]; ok {
+			return content, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockRunner) FetchPRFile(ctx context.Context, number int, path string) ([]byte, error) {
+	if m.prFiles != nil {
+		if prMap, ok := m.prFiles[number]; ok {
+			if content, ok := prMap[path]; ok {
+				return content, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 func (m *mockRunner) EnsureLabel(ctx context.Context, name, description, color string) error {
@@ -396,6 +418,23 @@ func (m *mockReviewer) ReviewPR(ctx context.Context, pr PullRequest, diff string
 		return decision.Veto, decision.Reason, nil
 	}
 	return false, "default mock pass", nil
+}
+
+type mockVulnScanner struct {
+	scans    map[int]vetoDecision
+	scanErrs map[int]error
+	calledOn []int
+}
+
+func (m *mockVulnScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (bool, string, error) {
+	m.calledOn = append(m.calledOn, pr.Number)
+	if err, ok := m.scanErrs[pr.Number]; ok {
+		return false, "", err
+	}
+	if decision, ok := m.scans[pr.Number]; ok {
+		return decision.Veto, decision.Reason, nil
+	}
+	return false, "default mock vuln pass", nil
 }
 
 func TestExecute(t *testing.T) {
@@ -440,7 +479,7 @@ func TestExecute(t *testing.T) {
 		MergeMethod: "squash",
 	}
 
-	err := execute(context.Background(), cfg, runner, nil)
+	err := execute(context.Background(), cfg, runner, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -455,7 +494,7 @@ func TestExecute(t *testing.T) {
 func TestExecuteNoOpenPRs(t *testing.T) {
 	runner := &mockRunner{prs: []PullRequest{}}
 	cfg := &Config{AllowedBots: defaultAllowedBots, MergeMethod: "squash"}
-	if err := execute(context.Background(), cfg, runner, nil); err != nil {
+	if err := execute(context.Background(), cfg, runner, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -525,7 +564,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 		GeminiModel:  "gemini-3.8-flash",
 	}
 
-	err := execute(context.Background(), cfg, runner, reviewer)
+	err := execute(context.Background(), cfg, runner, reviewer, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -566,7 +605,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 		},
 	}
 	runner.mergedPRs = nil
-	if err := execute(context.Background(), cfg, runner, reviewer); err != nil {
+	if err := execute(context.Background(), cfg, runner, reviewer, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(reviewer.calledOn) != 0 {
@@ -602,7 +641,7 @@ func TestExecuteLLMVetoMissingAPIKey(t *testing.T) {
 		GeminiAPIKey: "", // missing API key
 	}
 
-	err := execute(context.Background(), cfg, runner, nil)
+	err := execute(context.Background(), cfg, runner, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1012,5 +1051,166 @@ func TestCheckRenovateBump(t *testing.T) {
 				t.Errorf("checkRenovateBump() reason = %q, want %q", reason, tc.wantReason)
 			}
 		})
+	}
+}
+
+func TestExtractChangedLockfiles(t *testing.T) {
+	diff := `
+diff --git a/README.md b/README.md
+index 123..456 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-old
++new
+diff --git a/go.mod b/go.mod
+index 111..222 100644
+--- a/go.mod
++++ b/go.mod
+@@ -1 +1 @@
+-go 1.26
++go 1.27
+diff --git a/frontend/package-lock.json b/frontend/package-lock.json
+index 333..444 100644
+--- a/frontend/package-lock.json
++++ b/frontend/package-lock.json
+@@ -1 +1 @@
+-old
++new
+diff --git a/flake.lock b/flake.lock
+index 555..666 100644
+--- a/flake.lock
++++ b/flake.lock
+@@ -1 +1 @@
+-old
++new
+`
+	got := extractChangedLockfiles(diff)
+	want := []string{"flake.lock", "frontend/package-lock.json", "go.mod"}
+	if !slices.Equal(got, want) {
+		t.Errorf("extractChangedLockfiles() = %v, want %v", got, want)
+	}
+
+	emptyGot := extractChangedLockfiles("diff --git a/main.go b/main.go\n+new")
+	if len(emptyGot) != 0 {
+		t.Errorf("extractChangedLockfiles() for non-lockfile diff = %v, want empty", emptyGot)
+	}
+}
+
+func TestExecuteVulnerabilityScan(t *testing.T) {
+	validChecks := []StatusCheckItem{
+		{Status: "COMPLETED", Conclusion: "SUCCESS"},
+	}
+
+	prs := []PullRequest{
+		{
+			Number:            401,
+			Title:             "Clean dependency update",
+			Body:              validRenovateBody,
+			Author:            Author{Login: "renovate[bot]"},
+			Mergeable:         "MERGEABLE",
+			StatusCheckRollup: validChecks,
+		},
+		{
+			Number:            402,
+			Title:             "Vulnerable dependency update",
+			Body:              validRenovateBody,
+			Author:            Author{Login: "renovate[bot]"},
+			Mergeable:         "MERGEABLE",
+			StatusCheckRollup: validChecks,
+		},
+		{
+			Number:            403,
+			Title:             "Scanner error update",
+			Body:              validRenovateBody,
+			Author:            Author{Login: "renovate[bot]"},
+			Mergeable:         "MERGEABLE",
+			StatusCheckRollup: validChecks,
+		},
+	}
+
+	runner := &mockRunner{
+		prs: prs,
+	}
+
+	vulnScanner := &mockVulnScanner{
+		scans: map[int]vetoDecision{
+			401: {Veto: false, Reason: "no new vulnerabilities"},
+			402: {Veto: true, Reason: "new vulnerability: GHSA-1234"},
+		},
+		scanErrs: map[int]error{
+			403: errors.New("simulated scanner failure"),
+		},
+	}
+
+	reviewer := &mockReviewer{}
+
+	cfg := &Config{
+		AllowedBots:      defaultAllowedBots,
+		MergeMethod:      "squash",
+		LLMFinalVeto:     true,
+		GeminiAPIKey:     "dummy-key",
+		GeminiModel:      "gemini-flash-latest",
+		EnableOSVScanner: true,
+	}
+
+	err := execute(context.Background(), cfg, runner, reviewer, vulnScanner)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 401: pass (both vuln scan & reviewer pass -> merged)
+	// 402: vetoed by vuln scan (reviewer must NOT be called -> tokens saved)
+	// 403: scanner error -> skipped gracefully
+	expectedMerged := []int{401}
+	if !slices.Equal(runner.mergedPRs, expectedMerged) {
+		t.Errorf("expected merged PRs %v, got %v", expectedMerged, runner.mergedPRs)
+	}
+
+	// Vulnerability scanner called for all 3
+	expectedVulnCalls := []int{401, 402, 403}
+	if !slices.Equal(vulnScanner.calledOn, expectedVulnCalls) {
+		t.Errorf("expected vuln scanner called on %v, got %v", expectedVulnCalls, vulnScanner.calledOn)
+	}
+
+	// Reviewer must only be called for 401 (402 was vetoed prior, 403 failed prior)
+	expectedReviewerCalls := []int{401}
+	if !slices.Equal(reviewer.calledOn, expectedReviewerCalls) {
+		t.Errorf("expected reviewer called on %v, got %v", expectedReviewerCalls, reviewer.calledOn)
+	}
+
+	// 402 must be labeled with vetoLabelName
+	if !slices.Equal(runner.addedLabels[402], []string{vetoLabelName}) {
+		t.Errorf("expected PR 402 to have veto label %v, got %v", []string{vetoLabelName}, runner.addedLabels[402])
+	}
+}
+
+func TestParseConfigEnableOSVScanner(t *testing.T) {
+	// Default is true
+	cfg, err := parseConfig([]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.EnableOSVScanner {
+		t.Errorf("expected EnableOSVScanner default to be true")
+	}
+
+	// CLI flag overrides to false
+	cfgDisabled, err := parseConfig([]string{"--enable-osv-scanner=false"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfgDisabled.EnableOSVScanner {
+		t.Errorf("expected EnableOSVScanner to be false with flag")
+	}
+
+	// Environment variable overrides
+	t.Setenv("ENABLE_OSV_SCANNER", "false")
+	cfgEnv, err := parseConfig([]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfgEnv.EnableOSVScanner {
+		t.Errorf("expected EnableOSVScanner to be false from env")
 	}
 }

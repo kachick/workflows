@@ -1,6 +1,8 @@
 {
   lib,
   buildGo127Module,
+  makeWrapper,
+  osv-scanner,
 }:
 
 buildGo127Module (finalAttrs: {
@@ -18,6 +20,16 @@ buildGo127Module (finalAttrs: {
   };
 
   vendorHash = null;
+
+  nativeBuildInputs = [ makeWrapper ];
+
+  postInstall = ''
+    wrapProgram $out/bin/automerge --prefix PATH : ${
+      lib.makeBinPath [
+        osv-scanner
+      ]
+    }
+  '';
 
   env.CGO_ENABLED = "0";
 

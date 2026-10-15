@@ -1,0 +1,8 @@
+# https://google.github.io/osv-scanner/configuration/
+# Ignore Go stdlib vulnerabilities because Go compiler toolchain is managed by Nixpkgs/flake.nix,
+# while go.mod specifies the language compatibility version.
+[[PackageOverrides]]
+name = "stdlib"
+ecosystem = "Go"
+ignore = true
+reason = "Go toolchain version is governed by Nixpkgs/flake.nix"

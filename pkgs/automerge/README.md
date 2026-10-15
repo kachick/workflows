@@ -31,6 +31,10 @@ Accepting a small delay (such as running every two hours instead of immediate ev
   - Using a separate token or app just to approve pull requests adds secret management complexity and increases security risks.
   - Having a bot approve another bot pull request adds no real security value.
   - If automatic merging is desired on personal repositories, do not require pull request reviews before merging for bot accounts in repository branch protection or rulesets.
+- **Why OSV-Scanner diff check runs before LLM review**:
+  - Automates deterministic vulnerability checks for modified lockfiles (`go.mod`, `package-lock.json`, `Cargo.lock`, `flake.lock`, etc.) using Google OSV-Scanner.
+  - Compares base and PR dependencies to block only newly introduced vulnerabilities. If existing vulnerabilities remain unchanged during an intermediate version bump, the PR safely passes without false positives.
+  - Vetoing known vulnerabilities before invoking the LLM completely avoids spending API tokens on vulnerable pull requests.
 - **Why LLM review acts only as a final veto gatekeeper**:
   - LLM review acts strictly as a negative veto filter (default: pass) right before merging. It catches malicious code or critical breaking changes without stopping on style or test nitpicks. It never bypasses CI checks or allows ineligible pull requests to merge.
   - When vetoed, the workflow automatically tags the pull request with an `automerge:vetoed` label. Subsequent scheduled runs skip the labeled pull request immediately without spending API tokens. If a human reviewer decides to allow it, simply removing the label will re-enable automatic merging on the next run.
