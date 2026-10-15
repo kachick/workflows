@@ -27,8 +27,8 @@ func TestParseConfigDefaults(t *testing.T) {
 	if cfg.GeminiAPIKey != "" {
 		t.Errorf("expected default gemini-api-key empty, got %q", cfg.GeminiAPIKey)
 	}
-	if cfg.GeminiModel != "gemini-3.8-flash" {
-		t.Errorf("expected default gemini-model 'gemini-3.8-flash', got %q", cfg.GeminiModel)
+	if cfg.GeminiModel != "gemini-flash-latest" {
+		t.Errorf("expected default gemini-model 'gemini-flash-latest', got %q", cfg.GeminiModel)
 	}
 }
 

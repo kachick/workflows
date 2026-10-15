@@ -137,7 +137,7 @@ func parseConfig(args []string) (*Config, error) {
 	fs.StringVar(&cfg.MergeMethod, "merge-method", "squash", "Merge method (squash, merge, or rebase)")
 	fs.BoolVar(&cfg.LLMFinalVeto, "llm-final-veto", false, "Enable LLM final veto review before merging")
 	fs.StringVar(&cfg.GeminiAPIKey, "gemini-api-key", "", "Gemini API key for LLM final veto")
-	fs.StringVar(&cfg.GeminiModel, "gemini-model", "gemini-3.8-flash", "Gemini model name for LLM final veto")
+	fs.StringVar(&cfg.GeminiModel, "gemini-model", "gemini-flash-latest", "Gemini model name for LLM final veto")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -157,7 +157,7 @@ func parseConfig(args []string) (*Config, error) {
 	if env := os.Getenv("GEMINI_API_KEY"); env != "" && cfg.GeminiAPIKey == "" {
 		cfg.GeminiAPIKey = env
 	}
-	if env := os.Getenv("GEMINI_MODEL"); env != "" && cfg.GeminiModel == "gemini-3.8-flash" {
+	if env := os.Getenv("GEMINI_MODEL"); env != "" && cfg.GeminiModel == "gemini-flash-latest" {
 		cfg.GeminiModel = env
 	}
 

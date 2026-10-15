@@ -26,7 +26,7 @@ on:
         description: 'Gemini model name for LLM final veto'
         required: false
         type: string
-        default: 'gemini-3.8-flash'
+        default: 'gemini-flash-latest'
     secrets:
       APP_PRIVATE_KEY:
         description: 'GitHub App private key'
