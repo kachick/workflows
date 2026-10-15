@@ -38,6 +38,30 @@ Accepting a small delay (such as running every two hours instead of immediate ev
   - When vetoed, the workflow automatically tags the pull request with an `automerge:vetoed` label. Subsequent scheduled runs skip the labeled pull request immediately without spending API tokens. If a human reviewer decides to allow it, simply removing the label will re-enable automatic merging on the next run.
   - When the API key is missing or the API request fails, the merge is safely skipped for the next scheduled run rather than failing the whole workflow.
 
+## Security Guarantees & Invariants
+
+When modifying or extending the automerge workflow, preserve the following invariants:
+
+1. **Negative Veto Only (Never Invert to Positive Allow)**:
+   - The review acts strictly as a final **negative veto filter** after all deterministic rules pass (bot verification, draft exclusion, completed green CI checks, and version bump rules).
+   - **Critical Warning**: Never invert this flow to an "allow" model (e.g. merging because an LLM approved it, or letting a review bypass failing CI checks). An inverted flow makes prompt injection or hallucinations directly cause unauthorized merges and supply chain attacks.
+
+2. **Negative Labeling for Idempotency (`automerge:vetoed`)**:
+   - The label `automerge:vetoed` is strictly a negative filter to skip future runs and save tokens.
+   - Because it only denies actions, manipulating the label cannot cause an unauthorized merge:
+     - If the label is removed, all deterministic checks and the final veto review run again.
+     - If the label is forged or added mistakenly, merging is merely postponed (temporary denial of service, never privilege escalation).
+   - **Critical Warning**: Never introduce positive labels (e.g. `automerge:approved`) to authorize merges, because labels can be modified by bots or branch contributors.
+
+3. **Fail-Closed on Review Failure**:
+   - If the review API is unavailable, times out, or returns invalid data, the workflow must skip merging for that run. Never fall back to merging unverified pull requests when review is enabled.
+
+4. **Credential Boundaries**:
+   - API keys must always be passed via environment variables, not command-line arguments, to prevent leaking secrets in process tables (`ps`).
+
+5. **Input Truncation**:
+   - Pull request diffs and descriptions must be truncated to safe length limits to prevent token exhaustion and unexpected API costs.
+
 ## Usage
 
 ### Reusable Workflow
