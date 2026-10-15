@@ -21,6 +21,7 @@ tasks:
   lint:
     cmds:
       - CGO_ENABLED=0 go vet ./...
+      - go run ./cmd/workflowlint
       - dprint check
       - typos . .github .vscode
       - betterleaks git --config .betterleaks.toml
