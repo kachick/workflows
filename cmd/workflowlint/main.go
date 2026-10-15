@@ -25,4 +25,9 @@ func main() {
 		}
 		os.Exit(1)
 	}
+
+	if err := workflowlint.CheckNixInstallerSteps(*repoRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "workflowlint: %v\n", err)
+		os.Exit(1)
+	}
 }

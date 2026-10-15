@@ -162,3 +162,146 @@ func Check(repoRoot string) ([]string, error) {
 
 	return FindMissingWorkflows(existing, documented), nil
 }
+
+// FindReusableWorkflowFiles scans workflowDir and returns sorted filenames of reusable workflows.
+func FindReusableWorkflowFiles(workflowDir string) ([]string, error) {
+	entries, err := os.ReadDir(workflowDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: %s", ErrWorkflowDirNotFound, workflowDir)
+		}
+		return nil, fmt.Errorf("read workflow directory: %w", err)
+	}
+
+	var files []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if _, ok := ExtractWorkflowName(entry.Name()); ok {
+			files = append(files, entry.Name())
+		}
+	}
+
+	sort.Strings(files)
+	return files, nil
+}
+
+// ExtractNixInstallerStep extracts the normalized step definition of NixOS/nix-installer-action from workflow content.
+func ExtractNixInstallerStep(workflowContent string) (string, bool) {
+	scanner := bufio.NewScanner(strings.NewReader(workflowContent))
+	var currentStepLines []string
+	currentStepIndent := -1
+
+	flush := func() (string, bool) {
+		if len(currentStepLines) == 0 {
+			return "", false
+		}
+		isTarget := false
+		for _, l := range currentStepLines {
+			if strings.Contains(l, "NixOS/nix-installer-action") {
+				isTarget = true
+				break
+			}
+		}
+		if !isTarget {
+			return "", false
+		}
+
+		var normalized []string
+		for _, l := range currentStepLines {
+			if len(l) >= currentStepIndent {
+				normalized = append(normalized, l[currentStepIndent:])
+			} else {
+				normalized = append(normalized, strings.TrimSpace(l))
+			}
+		}
+		result := strings.TrimRight(strings.Join(normalized, "\n"), "\r\n ")
+		return result, true
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimLeft(line, " ")
+		indent := len(line) - len(trimmed)
+
+		// A step in GHA YAML starts with '- '
+		if strings.HasPrefix(trimmed, "- ") {
+			if currentStepIndent >= 0 && indent <= currentStepIndent {
+				if step, ok := flush(); ok {
+					return step, true
+				}
+				currentStepLines = nil
+			}
+			currentStepIndent = indent
+			currentStepLines = append(currentStepLines, line)
+			continue
+		}
+
+		if currentStepIndent >= 0 {
+			// If non-empty line has less or equal indent than the step item, step has ended
+			if strings.TrimSpace(line) != "" && indent < currentStepIndent {
+				if step, ok := flush(); ok {
+					return step, true
+				}
+				currentStepLines = nil
+				currentStepIndent = -1
+				continue
+			}
+			currentStepLines = append(currentStepLines, line)
+		}
+	}
+
+	if step, ok := flush(); ok {
+		return step, true
+	}
+
+	return "", false
+}
+
+// CheckNixInstallerSteps verifies that all reusable workflows using NixOS/nix-installer-action
+// share the identical step definition (version, inputs, extra-conf, etc.).
+func CheckNixInstallerSteps(repoRoot string) error {
+	workflowDir := filepath.Join(repoRoot, ".github", "workflows")
+	files, err := FindReusableWorkflowFiles(workflowDir)
+	if err != nil {
+		return err
+	}
+
+	type stepRecord struct {
+		filename string
+		step     string
+	}
+	var steps []stepRecord
+
+	for _, file := range files {
+		path := filepath.Join(workflowDir, file)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", file, err)
+		}
+
+		if step, ok := ExtractNixInstallerStep(string(content)); ok {
+			steps = append(steps, stepRecord{
+				filename: file,
+				step:     step,
+			})
+		}
+	}
+
+	if len(steps) <= 1 {
+		return nil
+	}
+
+	base := steps[0]
+	for _, current := range steps[1:] {
+		if current.step != base.step {
+			return fmt.Errorf("nix-installer action step mismatch between %s and %s:\n--- %s\n%s\n--- %s\n%s",
+				base.filename, current.filename,
+				base.filename, base.step,
+				current.filename, current.step)
+		}
+	}
+
+	return nil
+}

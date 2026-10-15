@@ -144,3 +144,149 @@ func TestCheckDetectsUndocumentedWorkflow(t *testing.T) {
 		t.Errorf("expected [undocumented], got %v", missing)
 	}
 }
+
+func TestExtractNixInstallerStep(t *testing.T) {
+	t.Run("extracts step when uses is first", func(t *testing.T) {
+		workflow := `
+jobs:
+  test:
+    steps:
+      - uses: actions/checkout@v7
+      - uses: NixOS/nix-installer-action@v1
+        with:
+          extra-conf: |
+            access-tokens = github.com=token
+      - run: nix flake check
+`
+		step, ok := ExtractNixInstallerStep(workflow)
+		if !ok {
+			t.Fatal("expected step to be found")
+		}
+		expected := `- uses: NixOS/nix-installer-action@v1
+  with:
+    extra-conf: |
+      access-tokens = github.com=token`
+		if step != expected {
+			t.Errorf("ExtractNixInstallerStep() =\n%q\nwant:\n%q", step, expected)
+		}
+	})
+
+	t.Run("extracts step when name is first", func(t *testing.T) {
+		workflow := `
+jobs:
+  test:
+    steps:
+      - name: Install Nix
+        uses: NixOS/nix-installer-action@v1
+      - run: nix flake check
+`
+		step, ok := ExtractNixInstallerStep(workflow)
+		if !ok {
+			t.Fatal("expected step to be found")
+		}
+		expected := `- name: Install Nix
+  uses: NixOS/nix-installer-action@v1`
+		if step != expected {
+			t.Errorf("ExtractNixInstallerStep() =\n%q\nwant:\n%q", step, expected)
+		}
+	})
+
+	t.Run("returns false when nix-installer-action is not used", func(t *testing.T) {
+		workflow := `
+jobs:
+  test:
+    steps:
+      - uses: actions/checkout@v7
+      - run: echo hello
+`
+		step, ok := ExtractNixInstallerStep(workflow)
+		if ok || step != "" {
+			t.Errorf("expected false, got (%q, %v)", step, ok)
+		}
+	})
+}
+
+func TestCheckNixInstallerStepsCurrentRepository(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	if err := CheckNixInstallerSteps(repoRoot); err != nil {
+		t.Fatalf("CheckNixInstallerSteps(repoRoot) failed: %v", err)
+	}
+}
+
+func TestCheckNixInstallerStepsDetectsMismatch(t *testing.T) {
+	tempDir := t.TempDir()
+	workflowDir := filepath.Join(tempDir, ".github", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatalf("failed to create workflow dir: %v", err)
+	}
+
+	workflowA := `
+jobs:
+  test:
+    steps:
+      - uses: NixOS/nix-installer-action@v1
+        with:
+          extra-conf: access-tokens = a
+`
+	workflowB := `
+jobs:
+  test:
+    steps:
+      - uses: NixOS/nix-installer-action@v1
+        with:
+          extra-conf: access-tokens = b
+`
+
+	if err := os.WriteFile(filepath.Join(workflowDir, "reusable-a.yml"), []byte(workflowA), 0o600); err != nil {
+		t.Fatalf("failed to write workflow A: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "reusable-b.yml"), []byte(workflowB), 0o600); err != nil {
+		t.Fatalf("failed to write workflow B: %v", err)
+	}
+
+	err := CheckNixInstallerSteps(tempDir)
+	if err == nil {
+		t.Fatal("expected error due to mismatch, got nil")
+	}
+}
+
+func TestCheckNixInstallerStepsIgnoresWorkflowsWithoutNix(t *testing.T) {
+	tempDir := t.TempDir()
+	workflowDir := filepath.Join(tempDir, ".github", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatalf("failed to create workflow dir: %v", err)
+	}
+
+	workflowA := `
+jobs:
+  test:
+    steps:
+      - uses: NixOS/nix-installer-action@v1
+`
+	workflowB := `
+jobs:
+  test:
+    steps:
+      - uses: NixOS/nix-installer-action@v1
+`
+	workflowNonNix := `
+jobs:
+  test:
+    steps:
+      - uses: actions/checkout@v7
+`
+
+	if err := os.WriteFile(filepath.Join(workflowDir, "reusable-a.yml"), []byte(workflowA), 0o600); err != nil {
+		t.Fatalf("failed to write workflow A: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "reusable-b.yml"), []byte(workflowB), 0o600); err != nil {
+		t.Fatalf("failed to write workflow B: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "reusable-non-nix.yml"), []byte(workflowNonNix), 0o600); err != nil {
+		t.Fatalf("failed to write non-nix workflow: %v", err)
+	}
+
+	if err := CheckNixInstallerSteps(tempDir); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
