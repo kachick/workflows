@@ -3,6 +3,8 @@
   buildGo127Module,
   makeWrapper,
   osv-scanner,
+  git,
+  gnutar,
 }:
 
 buildGo127Module (finalAttrs: {
@@ -27,6 +29,8 @@ buildGo127Module (finalAttrs: {
     wrapProgram $out/bin/automerge --prefix PATH : ${
       lib.makeBinPath [
         osv-scanner
+        git
+        gnutar
       ]
     }
   '';

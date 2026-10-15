@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -1035,6 +1036,16 @@ func TestCheckRenovateBump(t *testing.T) {
 }
 
 func TestExtractBaseTreeAndApplyPatch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("skipping test: git executable not found in PATH")
+	}
+	if _, err := exec.LookPath("tar"); err != nil {
+		t.Skip("skipping test: tar executable not found in PATH")
+	}
+	if _, err := findRepoRoot(context.Background()); err != nil {
+		t.Skipf("skipping test: not in a git repository: %v", err)
+	}
+
 	tmpDir := t.TempDir()
 	if err := extractBaseTree(context.Background(), tmpDir); err != nil {
 		t.Fatalf("extractBaseTree() failed: %v", err)
