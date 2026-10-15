@@ -144,11 +144,11 @@ func extractVersionParts(v string) (major string, minor string) {
 	return major, minor
 }
 
-func isDisallowedDependabotMajor(title string) bool {
+func checkDependabotBump(title string) (disallowed bool, reason string) {
 	matches := dependabotBumpRegex.FindStringSubmatch(title)
 	if matches == nil {
 		// Disallow group updates and unrecognized titles because their versions cannot be checked from the title.
-		return true
+		return true, "unrecognized title format or group update"
 	}
 
 	pkgIndex := dependabotBumpRegex.SubexpIndex("pkg")
@@ -161,22 +161,27 @@ func isDisallowedDependabotMajor(title string) bool {
 
 	// Allow major updates only for cachix because cachix releases major versions frequently.
 	if strings.Contains(pkg, "cachix") {
-		return false
+		return false, "allowed cachix update"
 	}
 
 	oldMajor, oldMinor := extractVersionParts(oldVer)
 	newMajor, newMinor := extractVersionParts(newVer)
 
 	if oldMajor != newMajor {
-		return true
+		return true, fmt.Sprintf("major update (%s -> %s)", oldVer, newVer)
 	}
 
 	// SemVer treats minor updates in 0.x releases as breaking changes (e.g. 0.1.0 -> 0.2.0).
 	if oldMajor == "0" && oldMinor != newMinor {
-		return true
+		return true, fmt.Sprintf("0.x minor update (%s -> %s)", oldVer, newVer)
 	}
 
-	return false
+	return false, "non-breaking update"
+}
+
+func isDisallowedDependabotMajor(title string) bool {
+	disallowed, _ := checkDependabotBump(title)
+	return disallowed
 }
 
 func isAllowedBot(login string, allowedBots []string) bool {
@@ -188,37 +193,42 @@ func isAllowedBot(login string, allowedBots []string) bool {
 	return false
 }
 
-func isEligible(pr PullRequest, allowedBots []string) bool {
+func checkEligibility(pr PullRequest, allowedBots []string) (bool, string) {
 	if !isAllowedBot(pr.Author.Login, allowedBots) {
-		return false
+		return false, fmt.Sprintf("author %q is not in allowed bots", pr.Author.Login)
 	}
 	if pr.IsDraft {
-		return false
+		return false, "PR is a draft"
 	}
 	if pr.Mergeable != "MERGEABLE" {
-		return false
+		return false, fmt.Sprintf("mergeable status is %q", pr.Mergeable)
 	}
 	if len(pr.StatusCheckRollup) == 0 {
-		return false
+		return false, "no status checks found"
 	}
 
 	// Accept SUCCESS, SKIPPED, and NEUTRAL check conclusions once completed.
 	for _, check := range pr.StatusCheckRollup {
 		if check.Status != "COMPLETED" {
-			return false
+			return false, fmt.Sprintf("status check is not completed (status: %s)", check.Status)
 		}
 		if check.Conclusion != "SUCCESS" && check.Conclusion != "SKIPPED" && check.Conclusion != "NEUTRAL" {
-			return false
+			return false, fmt.Sprintf("status check concluded with %q", check.Conclusion)
 		}
 	}
 
 	if strings.Contains(pr.Author.Login, "dependabot") {
-		if isDisallowedDependabotMajor(pr.Title) {
-			return false
+		if disallowed, reason := checkDependabotBump(pr.Title); disallowed {
+			return false, fmt.Sprintf("disallowed dependabot bump: %s", reason)
 		}
 	}
 
-	return true
+	return true, "eligible for merge"
+}
+
+func isEligible(pr PullRequest, allowedBots []string) bool {
+	eligible, _ := checkEligibility(pr, allowedBots)
+	return eligible
 }
 
 func filterEligible(prs []PullRequest, allowedBots []string) []PullRequest {
@@ -237,7 +247,22 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner) error {
 		return err
 	}
 
-	eligible := filterEligible(prs, cfg.AllowedBots)
+	if len(prs) == 0 {
+		fmt.Println("No open pull requests found.")
+		return nil
+	}
+
+	var eligible []PullRequest
+	for _, pr := range prs {
+		ok, reason := checkEligibility(pr, cfg.AllowedBots)
+		if ok {
+			fmt.Printf("PR #%d (%s): eligible\n", pr.Number, pr.Title)
+			eligible = append(eligible, pr)
+		} else {
+			fmt.Printf("PR #%d (%s): skipped (%s)\n", pr.Number, pr.Title, reason)
+		}
+	}
+
 	if len(eligible) == 0 {
 		fmt.Println("No eligible bot PR found for merge.")
 		return nil
