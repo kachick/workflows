@@ -37,7 +37,34 @@ const (
 	vetoLabelName        = "automerge:vetoed"
 	vetoLabelDescription = "Vetoed by automerge workflow"
 	vetoLabelColor       = "d73a4a"
+
+	blockedLabelName        = "automerge:blocked"
+	blockedLabelDescription = "Blocked by automerge workflow (requires manual review)"
+	blockedLabelColor       = "fbca04"
 )
+
+type PRAction string
+
+const (
+	ActionMerged  PRAction = "Merged"
+	ActionBlocked PRAction = "Blocked"
+	ActionVetoed  PRAction = "Vetoed"
+	ActionSkipped PRAction = "Skipped"
+)
+
+type PRSummaryResult struct {
+	Number int
+	Title  string
+	Author string
+	Action PRAction
+	Reason string
+}
+
+type EligibilityResult struct {
+	Eligible bool
+	Blocked  bool
+	Reason   string
+}
 
 type PullRequest struct {
 	Number            int               `json:"number"`
@@ -73,12 +100,60 @@ type Config struct {
 	EnableOSVScanner bool
 }
 
+type WorkflowMetadata struct {
+	ServerURL          string
+	Repository         string
+	RunID              string
+	WorkflowRepository string
+	WorkflowSHA        string
+	WorkflowFilePath   string
+}
+
+func (m WorkflowMetadata) IsComplete() bool {
+	return m.ServerURL != "" &&
+		m.Repository != "" &&
+		m.RunID != "" &&
+		m.WorkflowRepository != "" &&
+		m.WorkflowSHA != "" &&
+		m.WorkflowFilePath != ""
+}
+
+func (m WorkflowMetadata) HeaderText() string {
+	runURL := fmt.Sprintf("%s/%s/actions/runs/%s", m.ServerURL, m.Repository, m.RunID)
+	permalink := fmt.Sprintf("%s/%s/blob/%s/%s", m.ServerURL, m.WorkflowRepository, m.WorkflowSHA, m.WorkflowFilePath)
+	return fmt.Sprintf("Merged automatically by [workflow run](%s) (defined at [%s](%s)).",
+		runURL, m.WorkflowRepository, permalink)
+}
+
+func getWorkflowMetadata() WorkflowMetadata {
+	serverURL := os.Getenv("GITHUB_SERVER_URL")
+	if serverURL == "" {
+		serverURL = "https://github.com"
+	}
+	return WorkflowMetadata{
+		ServerURL:          serverURL,
+		Repository:         os.Getenv("GITHUB_REPOSITORY"),
+		RunID:              os.Getenv("GITHUB_RUN_ID"),
+		WorkflowRepository: os.Getenv("WORKFLOW_REPOSITORY"),
+		WorkflowSHA:        os.Getenv("WORKFLOW_SHA"),
+		WorkflowFilePath:   os.Getenv("WORKFLOW_FILE_PATH"),
+	}
+}
+
+func buildMergeComment(meta WorkflowMetadata) string {
+	if meta.IsComplete() {
+		return meta.HeaderText()
+	}
+	return "Merged automatically."
+}
+
 type CommandRunner interface {
 	FetchOpenPRs(ctx context.Context) ([]PullRequest, error)
 	FetchPRDiff(ctx context.Context, number int) (string, error)
 	EnsureLabel(ctx context.Context, name, description, color string) error
 	AddLabelToPR(ctx context.Context, number int, label string) error
 	MergePR(ctx context.Context, number int, method string) error
+	CommentPR(ctx context.Context, number int, body string) error
 }
 
 type DefaultCommandRunner struct{}
@@ -142,6 +217,15 @@ func (r *DefaultCommandRunner) MergePR(ctx context.Context, number int, method s
 		"--"+method,
 		"--delete-branch",
 		strconv.Itoa(number),
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func (r *DefaultCommandRunner) CommentPR(ctx context.Context, number int, body string) error {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "comment", strconv.Itoa(number),
+		"--body", body,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -327,52 +411,61 @@ func isAllowedBot(login string, allowedBots []string) bool {
 	return false
 }
 
-func checkEligibility(pr PullRequest, allowedBots []string) (bool, string) {
+func hasLabel(pr PullRequest, name string) bool {
 	for _, label := range pr.Labels {
-		if label.Name == vetoLabelName {
-			return false, fmt.Sprintf("PR has %q label", vetoLabelName)
+		if label.Name == name {
+			return true
 		}
 	}
+	return false
+}
+
+func checkEligibility(pr PullRequest, allowedBots []string) EligibilityResult {
+	if hasLabel(pr, vetoLabelName) {
+		return EligibilityResult{Eligible: false, Blocked: false, Reason: fmt.Sprintf("PR has %q label", vetoLabelName)}
+	}
+	if hasLabel(pr, blockedLabelName) {
+		return EligibilityResult{Eligible: false, Blocked: true, Reason: fmt.Sprintf("PR has %q label", blockedLabelName)}
+	}
 	if !isAllowedBot(pr.Author.Login, allowedBots) {
-		return false, fmt.Sprintf("author %q is not in allowed bots", pr.Author.Login)
+		return EligibilityResult{Eligible: false, Blocked: false, Reason: fmt.Sprintf("author %q is not in allowed bots", pr.Author.Login)}
 	}
 	if pr.IsDraft {
-		return false, "PR is a draft"
+		return EligibilityResult{Eligible: false, Blocked: false, Reason: "PR is a draft"}
 	}
 	if pr.Mergeable != "MERGEABLE" {
-		return false, fmt.Sprintf("mergeable status is %q", pr.Mergeable)
+		return EligibilityResult{Eligible: false, Blocked: false, Reason: fmt.Sprintf("mergeable status is %q", pr.Mergeable)}
 	}
 	if len(pr.StatusCheckRollup) == 0 {
-		return false, "no status checks found"
+		return EligibilityResult{Eligible: false, Blocked: false, Reason: "no status checks found"}
 	}
 
 	// Accept SUCCESS, SKIPPED, and NEUTRAL check conclusions once completed.
 	for _, check := range pr.StatusCheckRollup {
 		if check.Status != "COMPLETED" {
-			return false, fmt.Sprintf("status check is not completed (status: %s)", check.Status)
+			return EligibilityResult{Eligible: false, Blocked: false, Reason: fmt.Sprintf("status check is not completed (status: %s)", check.Status)}
 		}
 		if check.Conclusion != "SUCCESS" && check.Conclusion != "SKIPPED" && check.Conclusion != "NEUTRAL" {
-			return false, fmt.Sprintf("status check concluded with %q", check.Conclusion)
+			return EligibilityResult{Eligible: false, Blocked: false, Reason: fmt.Sprintf("status check concluded with %q", check.Conclusion)}
 		}
 	}
 
 	if strings.Contains(pr.Author.Login, "dependabot") {
 		if disallowed, reason := checkDependabotBump(pr.Title); disallowed {
-			return false, fmt.Sprintf("disallowed dependabot bump: %s", reason)
+			return EligibilityResult{Eligible: false, Blocked: true, Reason: fmt.Sprintf("disallowed dependabot bump: %s", reason)}
 		}
 	}
 	if strings.Contains(pr.Author.Login, "renovate") {
 		if disallowed, reason := checkRenovateBump(pr.Body); disallowed {
-			return false, fmt.Sprintf("disallowed renovate bump: %s", reason)
+			return EligibilityResult{Eligible: false, Blocked: true, Reason: fmt.Sprintf("disallowed renovate bump: %s", reason)}
 		}
 	}
 
-	return true, "eligible for merge"
+	return EligibilityResult{Eligible: true, Blocked: false, Reason: "eligible for merge"}
 }
 
 func isEligible(pr PullRequest, allowedBots []string) bool {
-	eligible, _ := checkEligibility(pr, allowedBots)
-	return eligible
+	return checkEligibility(pr, allowedBots).Eligible
 }
 
 func filterEligible(prs []PullRequest, allowedBots []string) []PullRequest {
@@ -813,11 +906,75 @@ Code Diff:
 	return veto, reason, nil
 }
 
-func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LLMReviewer, vulnScanner VulnerabilityScanner) error {
+func buildStepSummary(results []PRSummaryResult, meta WorkflowMetadata) string {
+	if len(results) == 0 {
+		return "### 🤖 Automerge Summary\n\nNo open pull requests found.\n"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("### 🤖 Automerge Summary\n\n")
+	sb.WriteString("| PR | Author | Result | Reason |\n")
+	sb.WriteString("|---|---|---|---|\n")
+
+	for _, r := range results {
+		cleanTitle := strings.ReplaceAll(r.Title, "|", `\|`)
+		cleanTitle = strings.ReplaceAll(cleanTitle, "\n", " ")
+
+		var prLink string
+		if meta.ServerURL != "" && meta.Repository != "" {
+			prLink = fmt.Sprintf("[#%d](%s/%s/pull/%d) %s", r.Number, meta.ServerURL, meta.Repository, r.Number, cleanTitle)
+		} else {
+			prLink = fmt.Sprintf("#%d %s", r.Number, cleanTitle)
+		}
+
+		var icon string
+		switch r.Action {
+		case ActionMerged:
+			icon = "✅ Merged"
+		case ActionBlocked:
+			icon = "⚠️ Blocked"
+		case ActionVetoed:
+			icon = "🚫 Vetoed"
+		case ActionSkipped:
+			icon = "⏭️ Skipped"
+		default:
+			icon = string(r.Action)
+		}
+
+		cleanReason := strings.ReplaceAll(r.Reason, "|", `\|`)
+		cleanReason = strings.ReplaceAll(cleanReason, "\n", " ")
+		sb.WriteString(fmt.Sprintf("| %s | @%s | %s | %s |\n", prLink, r.Author, icon, cleanReason))
+	}
+
+	return sb.String()
+}
+
+func appendFile(path string, content string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(content)
+	return err
+}
+
+func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LLMReviewer, vulnScanner VulnerabilityScanner, meta WorkflowMetadata) error {
 	prs, err := runner.FetchOpenPRs(ctx)
 	if err != nil {
 		return err
 	}
+
+	var summaries []PRSummaryResult
+	defer func() {
+		stepSummaryFile := os.Getenv("GITHUB_STEP_SUMMARY")
+		if stepSummaryFile != "" && len(prs) > 0 {
+			summaryText := buildStepSummary(summaries, meta)
+			if err := appendFile(stepSummaryFile, summaryText); err != nil {
+				fmt.Printf("Warning: failed to write step summary: %v\n", err)
+			}
+		}
+	}()
 
 	if len(prs) == 0 {
 		fmt.Println("No open pull requests found.")
@@ -826,12 +983,46 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 
 	var eligible []PullRequest
 	for _, pr := range prs {
-		ok, reason := checkEligibility(pr, cfg.AllowedBots)
-		if ok {
+		res := checkEligibility(pr, cfg.AllowedBots)
+		if res.Eligible {
 			fmt.Printf("PR #%d (%s): eligible\n", pr.Number, pr.Title)
 			eligible = append(eligible, pr)
 		} else {
-			fmt.Printf("PR #%d (%s): skipped (%s)\n", pr.Number, pr.Title, reason)
+			fmt.Printf("PR #%d (%s): skipped (%s)\n", pr.Number, pr.Title, res.Reason)
+			if res.Blocked {
+				// Why not label transient skips (CI pending/failure, conflicts):
+				// Transient skips usually resolve with subsequent pushes or CI retries.
+				// Label only policy blocks (e.g. major bumps) so humans can filter PRs that need review.
+				if !hasLabel(pr, blockedLabelName) {
+					if err := runner.EnsureLabel(ctx, blockedLabelName, blockedLabelDescription, blockedLabelColor); err != nil {
+						fmt.Printf("Warning: failed to ensure label %q: %v\n", blockedLabelName, err)
+					}
+					if err := runner.AddLabelToPR(ctx, pr.Number, blockedLabelName); err != nil {
+						fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", blockedLabelName, pr.Number, err)
+					}
+					// Why post a comment only on first labeling:
+					// Avoid posting repetitive comments on every scheduled run.
+					commentBody := fmt.Sprintf("Automerge was skipped because %s. Marking with `%s` for manual review.", res.Reason, blockedLabelName)
+					if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
+						fmt.Printf("Warning: failed to comment on blocked PR #%d: %v\n", pr.Number, err)
+					}
+				}
+				summaries = append(summaries, PRSummaryResult{
+					Number: pr.Number,
+					Title:  pr.Title,
+					Author: pr.Author.Login,
+					Action: ActionBlocked,
+					Reason: res.Reason,
+				})
+			} else {
+				summaries = append(summaries, PRSummaryResult{
+					Number: pr.Number,
+					Title:  pr.Title,
+					Author: pr.Author.Login,
+					Action: ActionSkipped,
+					Reason: res.Reason,
+				})
+			}
 		}
 	}
 
@@ -844,6 +1035,13 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 		diff, err := runner.FetchPRDiff(ctx, pr.Number)
 		if err != nil {
 			fmt.Printf("Warning: failed to fetch diff for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
+			summaries = append(summaries, PRSummaryResult{
+				Number: pr.Number,
+				Title:  pr.Title,
+				Author: pr.Author.Login,
+				Action: ActionSkipped,
+				Reason: "failed to fetch PR diff",
+			})
 			continue
 		}
 
@@ -852,6 +1050,13 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 			veto, reason, err := vulnScanner.ScanPR(ctx, pr, diff)
 			if err != nil {
 				fmt.Printf("Warning: vulnerability scan failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
+				summaries = append(summaries, PRSummaryResult{
+					Number: pr.Number,
+					Title:  pr.Title,
+					Author: pr.Author.Login,
+					Action: ActionSkipped,
+					Reason: "vulnerability scan failed",
+				})
 				continue
 			}
 
@@ -863,6 +1068,13 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 				if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
 					fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
 				}
+				summaries = append(summaries, PRSummaryResult{
+					Number: pr.Number,
+					Title:  pr.Title,
+					Author: pr.Author.Login,
+					Action: ActionVetoed,
+					Reason: fmt.Sprintf("vulnerability scan: %s", reason),
+				})
 				continue
 			}
 
@@ -872,6 +1084,13 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 		if cfg.LLMFinalVeto {
 			if cfg.GeminiAPIKey == "" {
 				fmt.Printf("Warning: llm-final-veto is enabled, but GEMINI_API_KEY is not set. Skipping merge for PR #%d to avoid unreviewed merges.\n", pr.Number)
+				summaries = append(summaries, PRSummaryResult{
+					Number: pr.Number,
+					Title:  pr.Title,
+					Author: pr.Author.Login,
+					Action: ActionSkipped,
+					Reason: "GEMINI_API_KEY is not set",
+				})
 				continue
 			}
 
@@ -879,6 +1098,13 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 			veto, reason, err := reviewer.ReviewPR(ctx, pr, diff)
 			if err != nil {
 				fmt.Printf("Warning: veto review failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
+				summaries = append(summaries, PRSummaryResult{
+					Number: pr.Number,
+					Title:  pr.Title,
+					Author: pr.Author.Login,
+					Action: ActionSkipped,
+					Reason: "veto review failed",
+				})
 				continue
 			}
 
@@ -890,6 +1116,13 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 				if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
 					fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
 				}
+				summaries = append(summaries, PRSummaryResult{
+					Number: pr.Number,
+					Title:  pr.Title,
+					Author: pr.Author.Login,
+					Action: ActionVetoed,
+					Reason: fmt.Sprintf("review veto: %s", reason),
+				})
 				continue
 			}
 
@@ -899,8 +1132,28 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 		fmt.Printf("Attempting to merge PR #%d (%s)...\n", pr.Number, pr.Title)
 		if err := runner.MergePR(ctx, pr.Number, cfg.MergeMethod); err != nil {
 			fmt.Printf("Failed to merge PR #%d (possibly conflicting with a prior merge). Skipping for next run: %v\n", pr.Number, err)
+			summaries = append(summaries, PRSummaryResult{
+				Number: pr.Number,
+				Title:  pr.Title,
+				Author: pr.Author.Login,
+				Action: ActionSkipped,
+				Reason: "merge failed (possible conflict)",
+			})
 		} else {
 			fmt.Printf("Successfully merged PR #%d.\n", pr.Number)
+			// Post comment after successful merge rather than before, because without merge queues,
+			// a merge attempt can fail due to race conditions or conflicts.
+			commentBody := buildMergeComment(meta)
+			if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
+				fmt.Printf("Warning: failed to post merge comment for PR #%d: %v\n", pr.Number, err)
+			}
+			summaries = append(summaries, PRSummaryResult{
+				Number: pr.Number,
+				Title:  pr.Title,
+				Author: pr.Author.Login,
+				Action: ActionMerged,
+				Reason: "merged successfully",
+			})
 		}
 	}
 
@@ -932,5 +1185,7 @@ func run(ctx context.Context, args []string) error {
 		reviewer = NewGeminiReviewer(cfg.GeminiAPIKey, cfg.GeminiModel)
 	}
 
-	return execute(ctx, cfg, runner, reviewer, vulnScanner)
+	meta := getWorkflowMetadata()
+
+	return execute(ctx, cfg, runner, reviewer, vulnScanner, meta)
 }

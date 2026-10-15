@@ -71,6 +71,7 @@ jobs:
           GH_TOKEN: ${{ steps.publish-token.outputs.token }}
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
           WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
           MERGE_METHOD: ${{ inputs.merge-method }}
           ALLOWED_BOTS: ${{ inputs.allowed-bots }}
           LLM_FINAL_VETO: ${{ inputs.llm-final-veto }}

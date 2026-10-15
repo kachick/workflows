@@ -31,6 +31,13 @@ Accepting a short schedule delay (such as checking every two hours instead of li
   - Automates deterministic vulnerability checks for modified lockfiles (`go.mod`, `package-lock.json`, `Cargo.lock`, `flake.lock`, etc.) using Google OSV-Scanner.
   - Compares base and PR dependencies to block only newly introduced vulnerabilities. If existing vulnerabilities remain unchanged during an intermediate version bump, the PR safely passes without false positives.
   - Vetoing known vulnerabilities before invoking the LLM completely avoids spending API tokens on vulnerable pull requests.
+- **Why automerge posts a comment after merging instead of before**:
+  - Without merge queues, an attempt to merge can fail from race conditions or merge conflicts. Posting right after a successful merge ensures comments on pull requests stay accurate.
+- **Why automerge labels `automerge:blocked` only for policy blocks (not transient CI failures)**:
+  - Transient issues like in-progress CI, temporary test failures, or git conflicts often resolve themselves through subsequent bot updates or retries.
+  - Policy blocks (such as major version bumps or group updates) cannot merge without human approval. Labeling these pull requests with `automerge:blocked` allows easy cross-repository filtering (`user:kachick is:pr is:open label:automerge:blocked`) without failing the workflow or creating awkward review rejections.
+- **Why automerge writes a Step Summary**:
+  - Actions Step Summary provides a clear overview of all inspected pull requests and their results (merged, blocked, vetoed, or skipped) directly in the Actions UI, without digging through runner logs or failing the workflow.
 - **Why LLM review acts only as a final veto gatekeeper**:
   - LLM review acts strictly as a negative veto filter right before merging. Gemini inspects the diff and PR description for security risks and breaking changes with severity levels, and code logic decides whether to veto the merge. It never bypasses CI checks or allows ineligible pull requests to merge.
   - When vetoed, the workflow automatically tags the pull request with an `automerge:vetoed` label. Subsequent scheduled runs skip the labeled pull request immediately without spending API tokens. If a human reviewer decides to allow it, simply removing the label will re-enable automatic merging on the next run.

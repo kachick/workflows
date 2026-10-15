@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -344,6 +345,8 @@ type mockRunner struct {
 	addedLabels   map[int][]string
 	mergedPRs     []int
 	mergeErrOn    map[int]error
+	comments      map[int][]string
+	commentErrOn  map[int]error
 }
 
 func (m *mockRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest, error) {
@@ -381,6 +384,17 @@ func (m *mockRunner) MergePR(ctx context.Context, number int, method string) err
 		return err
 	}
 	m.mergedPRs = append(m.mergedPRs, number)
+	return nil
+}
+
+func (m *mockRunner) CommentPR(ctx context.Context, number int, body string) error {
+	if err, ok := m.commentErrOn[number]; ok {
+		return err
+	}
+	if m.comments == nil {
+		m.comments = make(map[int][]string)
+	}
+	m.comments[number] = append(m.comments[number], body)
 	return nil
 }
 
@@ -460,7 +474,7 @@ func TestExecute(t *testing.T) {
 		MergeMethod: "squash",
 	}
 
-	err := execute(context.Background(), cfg, runner, nil, nil)
+	err := execute(context.Background(), cfg, runner, nil, nil, WorkflowMetadata{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -475,7 +489,7 @@ func TestExecute(t *testing.T) {
 func TestExecuteNoOpenPRs(t *testing.T) {
 	runner := &mockRunner{prs: []PullRequest{}}
 	cfg := &Config{AllowedBots: defaultAllowedBots, MergeMethod: "squash"}
-	if err := execute(context.Background(), cfg, runner, nil, nil); err != nil {
+	if err := execute(context.Background(), cfg, runner, nil, nil, WorkflowMetadata{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -545,7 +559,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 		GeminiModel:  "gemini-3.8-flash",
 	}
 
-	err := execute(context.Background(), cfg, runner, reviewer, nil)
+	err := execute(context.Background(), cfg, runner, reviewer, nil, WorkflowMetadata{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -586,7 +600,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 		},
 	}
 	runner.mergedPRs = nil
-	if err := execute(context.Background(), cfg, runner, reviewer, nil); err != nil {
+	if err := execute(context.Background(), cfg, runner, reviewer, nil, WorkflowMetadata{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(reviewer.calledOn) != 0 {
@@ -622,7 +636,7 @@ func TestExecuteLLMVetoMissingAPIKey(t *testing.T) {
 		GeminiAPIKey: "", // missing API key
 	}
 
-	err := execute(context.Background(), cfg, runner, nil, nil)
+	err := execute(context.Background(), cfg, runner, nil, nil, WorkflowMetadata{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -897,57 +911,62 @@ func TestCheckEligibility(t *testing.T) {
 		StatusCheckRollup: validChecks,
 	}
 
-	ok, reason := checkEligibility(basePR, defaultAllowedBots)
-	if !ok || reason != "eligible for merge" {
-		t.Fatalf("expected eligible for merge, got ok=%v, reason=%q", ok, reason)
+	res := checkEligibility(basePR, defaultAllowedBots)
+	if !res.Eligible || res.Reason != "eligible for merge" {
+		t.Fatalf("expected eligible for merge, got eligible=%v, reason=%q", res.Eligible, res.Reason)
 	}
 
 	dependabot0xPR := basePR
 	dependabot0xPR.Author.Login = "dependabot[bot]"
 	dependabot0xPR.Title = "Bump golang.org/x/sys from 0.48.0 to 0.49.0"
-	if ok, reason := checkEligibility(dependabot0xPR, defaultAllowedBots); !ok {
-		t.Fatalf("expected dependabot 0.x bump to be eligible, got reason=%q", reason)
+	if res := checkEligibility(dependabot0xPR, defaultAllowedBots); !res.Eligible {
+		t.Fatalf("expected dependabot 0.x bump to be eligible, got reason=%q", res.Reason)
 	}
 
 	renovate0xPR := basePR
 	renovate0xPR.Author.Login = "renovate[bot]"
 	renovate0xPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [dprint/dprint-plugin-markdown](https://example.com) | minor | `0.24.0` → `0.26.0` |\n"
-	if ok, reason := checkEligibility(renovate0xPR, defaultAllowedBots); !ok {
-		t.Fatalf("expected renovate 0.x bump to be eligible, got reason=%q", reason)
+	if res := checkEligibility(renovate0xPR, defaultAllowedBots); !res.Eligible {
+		t.Fatalf("expected renovate 0.x bump to be eligible, got reason=%q", res.Reason)
 	}
 
 	tests := []struct {
-		name       string
-		modify     func(pr *PullRequest)
-		wantReason string
+		name        string
+		modify      func(pr *PullRequest)
+		wantReason  string
+		wantBlocked bool
 	}{
 		{
 			name: "unallowed author",
 			modify: func(pr *PullRequest) {
 				pr.Author.Login = "attacker[bot]"
 			},
-			wantReason: `author "attacker[bot]" is not in allowed bots`,
+			wantReason:  `author "attacker[bot]" is not in allowed bots`,
+			wantBlocked: false,
 		},
 		{
 			name: "draft PR",
 			modify: func(pr *PullRequest) {
 				pr.IsDraft = true
 			},
-			wantReason: "PR is a draft",
+			wantReason:  "PR is a draft",
+			wantBlocked: false,
 		},
 		{
 			name: "conflicting PR",
 			modify: func(pr *PullRequest) {
 				pr.Mergeable = "CONFLICTING"
 			},
-			wantReason: `mergeable status is "CONFLICTING"`,
+			wantReason:  `mergeable status is "CONFLICTING"`,
+			wantBlocked: false,
 		},
 		{
 			name: "empty checks",
 			modify: func(pr *PullRequest) {
 				pr.StatusCheckRollup = []StatusCheckItem{}
 			},
-			wantReason: "no status checks found",
+			wantReason:  "no status checks found",
+			wantBlocked: false,
 		},
 		{
 			name: "in progress check",
@@ -956,7 +975,8 @@ func TestCheckEligibility(t *testing.T) {
 					{Status: "IN_PROGRESS", Conclusion: ""},
 				}
 			},
-			wantReason: "status check is not completed (status: IN_PROGRESS)",
+			wantReason:  "status check is not completed (status: IN_PROGRESS)",
+			wantBlocked: false,
 		},
 		{
 			name: "failed check",
@@ -965,7 +985,8 @@ func TestCheckEligibility(t *testing.T) {
 					{Status: "COMPLETED", Conclusion: "FAILURE"},
 				}
 			},
-			wantReason: `status check concluded with "FAILURE"`,
+			wantReason:  `status check concluded with "FAILURE"`,
+			wantBlocked: false,
 		},
 		{
 			name: "dependabot major update",
@@ -973,7 +994,8 @@ func TestCheckEligibility(t *testing.T) {
 				pr.Author.Login = "dependabot[bot]"
 				pr.Title = "Bump actions/checkout from 3.0.0 to 4.0.0"
 			},
-			wantReason: "disallowed dependabot bump: major update (3.0.0 -> 4.0.0)",
+			wantReason:  "disallowed dependabot bump: major update (3.0.0 -> 4.0.0)",
+			wantBlocked: true,
 		},
 		{
 			name: "renovate major update",
@@ -981,7 +1003,8 @@ func TestCheckEligibility(t *testing.T) {
 				pr.Author.Login = "renovate[bot]"
 				pr.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [actions/checkout](https://example.com) | major | `3.0.0` -> `4.0.0` |\n"
 			},
-			wantReason: "disallowed renovate bump: major update (3.0.0 -> 4.0.0)",
+			wantReason:  "disallowed renovate bump: major update (3.0.0 -> 4.0.0)",
+			wantBlocked: true,
 		},
 		{
 			name: "renovate unrecognized body",
@@ -989,14 +1012,24 @@ func TestCheckEligibility(t *testing.T) {
 				pr.Author.Login = "renovate[bot]"
 				pr.Body = "Unrecognized body without table"
 			},
-			wantReason: "disallowed renovate bump: unrecognized body format or no update rows found",
+			wantReason:  "disallowed renovate bump: unrecognized body format or no update rows found",
+			wantBlocked: true,
 		},
 		{
 			name: "veto label exists",
 			modify: func(pr *PullRequest) {
 				pr.Labels = []Label{{Name: vetoLabelName}}
 			},
-			wantReason: fmt.Sprintf("PR has %q label", vetoLabelName),
+			wantReason:  fmt.Sprintf("PR has %q label", vetoLabelName),
+			wantBlocked: false,
+		},
+		{
+			name: "blocked label exists",
+			modify: func(pr *PullRequest) {
+				pr.Labels = []Label{{Name: blockedLabelName}}
+			},
+			wantReason:  fmt.Sprintf("PR has %q label", blockedLabelName),
+			wantBlocked: true,
 		},
 	}
 
@@ -1004,12 +1037,15 @@ func TestCheckEligibility(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pr := basePR
 			tc.modify(&pr)
-			ok, reason := checkEligibility(pr, defaultAllowedBots)
-			if ok {
+			res := checkEligibility(pr, defaultAllowedBots)
+			if res.Eligible {
 				t.Fatalf("expected PR to be ineligible")
 			}
-			if reason != tc.wantReason {
-				t.Errorf("checkEligibility() reason = %q, want %q", reason, tc.wantReason)
+			if res.Reason != tc.wantReason {
+				t.Errorf("checkEligibility() reason = %q, want %q", res.Reason, tc.wantReason)
+			}
+			if res.Blocked != tc.wantBlocked {
+				t.Errorf("checkEligibility() blocked = %v, want %v", res.Blocked, tc.wantBlocked)
 			}
 		})
 	}
@@ -1193,7 +1229,7 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 		EnableOSVScanner: true,
 	}
 
-	err := execute(context.Background(), cfg, runner, reviewer, vulnScanner)
+	err := execute(context.Background(), cfg, runner, reviewer, vulnScanner, WorkflowMetadata{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1251,5 +1287,283 @@ func TestParseConfigEnableOSVScanner(t *testing.T) {
 	}
 	if cfgEnv.EnableOSVScanner {
 		t.Errorf("expected EnableOSVScanner to be false from env")
+	}
+}
+
+func TestBuildMergeComment(t *testing.T) {
+	t.Run("complete metadata generates full provenance link", func(t *testing.T) {
+		meta := WorkflowMetadata{
+			ServerURL:          "https://github.com",
+			Repository:         "kachick/workflows",
+			RunID:              "12345678",
+			WorkflowRepository: "kachick/workflows",
+			WorkflowSHA:        "abcdef123456",
+			WorkflowFilePath:   ".github/workflows/reusable-automerge.yml",
+		}
+		expected := "Merged automatically by [workflow run](https://github.com/kachick/workflows/actions/runs/12345678) (defined at [kachick/workflows](https://github.com/kachick/workflows/blob/abcdef123456/.github/workflows/reusable-automerge.yml))."
+		got := buildMergeComment(meta)
+		if got != expected {
+			t.Errorf("buildMergeComment() = %q, want %q", got, expected)
+		}
+	})
+
+	t.Run("incomplete metadata falls back to simple message", func(t *testing.T) {
+		meta := WorkflowMetadata{
+			ServerURL: "https://github.com",
+		}
+		expected := "Merged automatically."
+		got := buildMergeComment(meta)
+		if got != expected {
+			t.Errorf("buildMergeComment() = %q, want %q", got, expected)
+		}
+	})
+}
+
+func TestExecutePostsMergeComment(t *testing.T) {
+	validChecks := []StatusCheckItem{
+		{Status: "COMPLETED", Conclusion: "SUCCESS"},
+	}
+
+	runner := &mockRunner{
+		prs: []PullRequest{
+			{
+				Number:            501,
+				Title:             "Merged PR",
+				Body:              validRenovateBody,
+				Author:            Author{Login: "renovate[bot]"},
+				Mergeable:         "MERGEABLE",
+				StatusCheckRollup: validChecks,
+			},
+			{
+				Number:            502,
+				Title:             "Failed merge PR",
+				Body:              validRenovateBody,
+				Author:            Author{Login: "renovate[bot]"},
+				Mergeable:         "MERGEABLE",
+				StatusCheckRollup: validChecks,
+			},
+		},
+		mergeErrOn: map[int]error{
+			502: errors.New("simulated merge conflict"),
+		},
+	}
+
+	cfg := &Config{
+		AllowedBots: defaultAllowedBots,
+		MergeMethod: "squash",
+	}
+
+	meta := WorkflowMetadata{
+		ServerURL:          "https://github.com",
+		Repository:         "kachick/workflows",
+		RunID:              "99999",
+		WorkflowRepository: "kachick/workflows",
+		WorkflowSHA:        "sha123",
+		WorkflowFilePath:   ".github/workflows/reusable-automerge.yml",
+	}
+
+	err := execute(context.Background(), cfg, runner, nil, nil, meta)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 501 should have merge comment posted
+	if len(runner.comments[501]) != 1 {
+		t.Fatalf("expected 1 comment on PR 501, got %v", runner.comments[501])
+	}
+	expectedComment := meta.HeaderText()
+	if runner.comments[501][0] != expectedComment {
+		t.Errorf("expected comment %q, got %q", expectedComment, runner.comments[501][0])
+	}
+
+	// 502 failed to merge, so comment must NOT be posted
+	if len(runner.comments[502]) != 0 {
+		t.Errorf("expected no comments on PR 502, got %v", runner.comments[502])
+	}
+}
+
+func TestExecuteLabelsBlockedPR(t *testing.T) {
+	validChecks := []StatusCheckItem{
+		{Status: "COMPLETED", Conclusion: "SUCCESS"},
+	}
+
+	runner := &mockRunner{
+		prs: []PullRequest{
+			{
+				Number:            601,
+				Title:             "Bump actions/checkout from 3.0.0 to 4.0.0", // Dependabot major -> blocked
+				Author:            Author{Login: "dependabot[bot]"},
+				Mergeable:         "MERGEABLE",
+				StatusCheckRollup: validChecks,
+			},
+			{
+				Number:            602,
+				Title:             "Bump actions/checkout from 3.0.0 to 4.0.0", // Already blocked
+				Author:            Author{Login: "dependabot[bot]"},
+				Mergeable:         "MERGEABLE",
+				StatusCheckRollup: validChecks,
+				Labels:            []Label{{Name: blockedLabelName}},
+			},
+			{
+				Number:            603,
+				Title:             "Draft PR", // Transient skip -> must NOT be labeled
+				Author:            Author{Login: "dependabot[bot]"},
+				IsDraft:           true,
+				Mergeable:         "MERGEABLE",
+				StatusCheckRollup: validChecks,
+			},
+		},
+	}
+
+	cfg := &Config{
+		AllowedBots: defaultAllowedBots,
+		MergeMethod: "squash",
+	}
+
+	err := execute(context.Background(), cfg, runner, nil, nil, WorkflowMetadata{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 601 must be labeled with automerge:blocked and commented on
+	if !slices.Equal(runner.addedLabels[601], []string{blockedLabelName}) {
+		t.Errorf("expected PR 601 to have label %v, got %v", []string{blockedLabelName}, runner.addedLabels[601])
+	}
+	if !slices.Contains(runner.ensuredLabels, blockedLabelName) {
+		t.Errorf("expected ensuredLabels to contain %q, got %v", blockedLabelName, runner.ensuredLabels)
+	}
+	if len(runner.comments[601]) != 1 {
+		t.Fatalf("expected 1 comment on PR 601, got %v", runner.comments[601])
+	}
+	if !strings.Contains(runner.comments[601][0], blockedLabelName) {
+		t.Errorf("expected comment on 601 to mention %q, got %q", blockedLabelName, runner.comments[601][0])
+	}
+
+	// 602 was already labeled, so AddLabelToPR and CommentPR must NOT be called again
+	if len(runner.addedLabels[602]) != 0 {
+		t.Errorf("expected no additional labels added to PR 602, got %v", runner.addedLabels[602])
+	}
+	if len(runner.comments[602]) != 0 {
+		t.Errorf("expected no comments on PR 602, got %v", runner.comments[602])
+	}
+
+	// 603 is a draft, so it must NOT be labeled as blocked
+	if len(runner.addedLabels[603]) != 0 {
+		t.Errorf("expected no labels added to draft PR 603, got %v", runner.addedLabels[603])
+	}
+	if len(runner.comments[603]) != 0 {
+		t.Errorf("expected no comments on draft PR 603, got %v", runner.comments[603])
+	}
+}
+
+func TestBuildStepSummary(t *testing.T) {
+	meta := WorkflowMetadata{
+		ServerURL:  "https://github.com",
+		Repository: "kachick/workflows",
+	}
+
+	t.Run("empty results", func(t *testing.T) {
+		summary := buildStepSummary(nil, meta)
+		expected := "### 🤖 Automerge Summary\n\nNo open pull requests found.\n"
+		if summary != expected {
+			t.Errorf("buildStepSummary() = %q, want %q", summary, expected)
+		}
+	})
+
+	t.Run("formats rows correctly with links and escaped characters", func(t *testing.T) {
+		results := []PRSummaryResult{
+			{
+				Number: 1,
+				Title:  "Update foo | bar",
+				Author: "renovate[bot]",
+				Action: ActionMerged,
+				Reason: "merged successfully",
+			},
+			{
+				Number: 2,
+				Title:  "Major update",
+				Author: "dependabot[bot]",
+				Action: ActionBlocked,
+				Reason: "major update (1.0 -> 2.0)",
+			},
+			{
+				Number: 3,
+				Title:  "Vetoed update",
+				Author: "renovate[bot]",
+				Action: ActionVetoed,
+				Reason: "suspicious code",
+			},
+			{
+				Number: 4,
+				Title:  "Pending checks",
+				Author: "samuebot[bot]",
+				Action: ActionSkipped,
+				Reason: "status check pending",
+			},
+		}
+
+		summary := buildStepSummary(results, meta)
+		if !strings.Contains(summary, "| [#1](https://github.com/kachick/workflows/pull/1) Update foo \\| bar | @renovate[bot] | ✅ Merged | merged successfully |") {
+			t.Errorf("expected merged row in summary, got:\n%s", summary)
+		}
+		if !strings.Contains(summary, "| [#2](https://github.com/kachick/workflows/pull/2) Major update | @dependabot[bot] | ⚠️ Blocked | major update (1.0 -> 2.0) |") {
+			t.Errorf("expected blocked row in summary, got:\n%s", summary)
+		}
+		if !strings.Contains(summary, "| [#3](https://github.com/kachick/workflows/pull/3) Vetoed update | @renovate[bot] | 🚫 Vetoed | suspicious code |") {
+			t.Errorf("expected vetoed row in summary, got:\n%s", summary)
+		}
+		if !strings.Contains(summary, "| [#4](https://github.com/kachick/workflows/pull/4) Pending checks | @samuebot[bot] | ⏭️ Skipped | status check pending |") {
+			t.Errorf("expected skipped row in summary, got:\n%s", summary)
+		}
+	})
+}
+
+func TestExecuteWritesStepSummary(t *testing.T) {
+	tmpDir := t.TempDir()
+	summaryFile := filepath.Join(tmpDir, "step_summary.md")
+	t.Setenv("GITHUB_STEP_SUMMARY", summaryFile)
+
+	validChecks := []StatusCheckItem{
+		{Status: "COMPLETED", Conclusion: "SUCCESS"},
+	}
+
+	runner := &mockRunner{
+		prs: []PullRequest{
+			{
+				Number:            701,
+				Title:             "Merged PR",
+				Body:              validRenovateBody,
+				Author:            Author{Login: "renovate[bot]"},
+				Mergeable:         "MERGEABLE",
+				StatusCheckRollup: validChecks,
+			},
+		},
+	}
+
+	cfg := &Config{
+		AllowedBots: defaultAllowedBots,
+		MergeMethod: "squash",
+	}
+
+	meta := WorkflowMetadata{
+		ServerURL:  "https://github.com",
+		Repository: "kachick/workflows",
+	}
+
+	err := execute(context.Background(), cfg, runner, nil, nil, meta)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	content, err := os.ReadFile(summaryFile)
+	if err != nil {
+		t.Fatalf("failed to read step summary file: %v", err)
+	}
+
+	if !strings.Contains(string(content), "### 🤖 Automerge Summary") {
+		t.Errorf("expected summary header, got: %s", string(content))
+	}
+	if !strings.Contains(string(content), "✅ Merged") {
+		t.Errorf("expected merged icon in summary, got: %s", string(content))
 	}
 }
