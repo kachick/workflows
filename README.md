@@ -8,7 +8,6 @@ Personal collection of reusable GitHub Actions workflows.
   Shared jobs that caller repositories can invoke with minimal configuration.
 - **Powered by Nix**:
   Back-end CLI tools run directly via `nix run github:kachick/workflows#<target>` on Nix-enabled runners.
-  _(Exception: `reusable-betterleaks.yml` is a temporary bridge. It downloads pre-built upstream assets directly to avoid Nix setup overhead on lightweight runners.)_
 
 ### This is not the final design
 
