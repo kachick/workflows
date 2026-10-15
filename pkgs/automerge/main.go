@@ -28,6 +28,12 @@ var defaultAllowedBots = []string{
 
 var dependabotBumpRegex = regexp.MustCompile(`^Bump (?P<pkg>.+) from (?P<old>[^ ]+) to (?P<new>[^ ]+)(?: in .+)?$`)
 
+const (
+	vetoLabelName        = "automerge:vetoed"
+	vetoLabelDescription = "Vetoed by automerge workflow"
+	vetoLabelColor       = "d73a4a"
+)
+
 type PullRequest struct {
 	Number            int               `json:"number"`
 	Title             string            `json:"title"`
@@ -36,6 +42,11 @@ type PullRequest struct {
 	IsDraft           bool              `json:"isDraft"`
 	Mergeable         string            `json:"mergeable"`
 	StatusCheckRollup []StatusCheckItem `json:"statusCheckRollup"`
+	Labels            []Label           `json:"labels"`
+}
+
+type Label struct {
+	Name string `json:"name"`
 }
 
 type Author struct {
@@ -58,6 +69,8 @@ type Config struct {
 type CommandRunner interface {
 	FetchOpenPRs(ctx context.Context) ([]PullRequest, error)
 	FetchPRDiff(ctx context.Context, number int) (string, error)
+	EnsureLabel(ctx context.Context, name, description, color string) error
+	AddLabelToPR(ctx context.Context, number int, label string) error
 	MergePR(ctx context.Context, number int, method string) error
 }
 
@@ -66,7 +79,7 @@ type DefaultCommandRunner struct{}
 func (r *DefaultCommandRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"--state", "open",
-		"--json", "number,title,body,author,isDraft,mergeable,statusCheckRollup",
+		"--json", "number,title,body,author,isDraft,mergeable,statusCheckRollup,labels",
 	)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -95,6 +108,26 @@ func (r *DefaultCommandRunner) FetchPRDiff(ctx context.Context, number int) (str
 	}
 
 	return stdout.String(), nil
+}
+
+func (r *DefaultCommandRunner) EnsureLabel(ctx context.Context, name, description, color string) error {
+	cmd := exec.CommandContext(ctx, "gh", "label", "create", name,
+		"--description", description,
+		"--color", color,
+		"--force",
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func (r *DefaultCommandRunner) AddLabelToPR(ctx context.Context, number int, label string) error {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "edit", strconv.Itoa(number),
+		"--add-label", label,
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func (r *DefaultCommandRunner) MergePR(ctx context.Context, number int, method string) error {
@@ -234,6 +267,11 @@ func isAllowedBot(login string, allowedBots []string) bool {
 }
 
 func checkEligibility(pr PullRequest, allowedBots []string) (bool, string) {
+	for _, label := range pr.Labels {
+		if label.Name == vetoLabelName {
+			return false, fmt.Sprintf("PR has %q label", vetoLabelName)
+		}
+	}
 	if !isAllowedBot(pr.Author.Login, allowedBots) {
 		return false, fmt.Sprintf("author %q is not in allowed bots", pr.Author.Login)
 	}
@@ -496,7 +534,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 				continue
 			}
 
-			fmt.Printf("Running LLM final veto review for PR #%d (%s)...\n", pr.Number, pr.Title)
+			fmt.Printf("Running final veto review for PR #%d (%s)...\n", pr.Number, pr.Title)
 			diff, err := runner.FetchPRDiff(ctx, pr.Number)
 			if err != nil {
 				fmt.Printf("Warning: failed to fetch diff for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
@@ -505,16 +543,22 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 
 			veto, reason, err := reviewer.ReviewPR(ctx, pr, diff)
 			if err != nil {
-				fmt.Printf("Warning: LLM veto review failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
+				fmt.Printf("Warning: veto review failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
 				continue
 			}
 
 			if veto {
-				fmt.Printf("PR #%d (%s): VETOED by LLM review: %s. Skipping merge.\n", pr.Number, pr.Title, reason)
+				fmt.Printf("PR #%d (%s): VETOED by review: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
+				if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
+					fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
+				}
+				if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
+					fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
+				}
 				continue
 			}
 
-			fmt.Printf("PR #%d (%s): LLM review passed: %s. Proceeding to merge.\n", pr.Number, pr.Title, reason)
+			fmt.Printf("PR #%d (%s): review passed: %s. Proceeding to merge.\n", pr.Number, pr.Title, reason)
 		}
 
 		fmt.Printf("Attempting to merge PR #%d (%s)...\n", pr.Number, pr.Title)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -305,12 +306,14 @@ func TestIsEligible(t *testing.T) {
 }
 
 type mockRunner struct {
-	prs        []PullRequest
-	diffs      map[int]string
-	fetchErr   error
-	diffErrOn  map[int]error
-	mergedPRs  []int
-	mergeErrOn map[int]error
+	prs           []PullRequest
+	diffs         map[int]string
+	fetchErr      error
+	diffErrOn     map[int]error
+	ensuredLabels []string
+	addedLabels   map[int][]string
+	mergedPRs     []int
+	mergeErrOn    map[int]error
 }
 
 func (m *mockRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest, error) {
@@ -328,6 +331,19 @@ func (m *mockRunner) FetchPRDiff(ctx context.Context, number int) (string, error
 		return diff, nil
 	}
 	return "diff --git a/go.mod b/go.mod\n+example", nil
+}
+
+func (m *mockRunner) EnsureLabel(ctx context.Context, name, description, color string) error {
+	m.ensuredLabels = append(m.ensuredLabels, name)
+	return nil
+}
+
+func (m *mockRunner) AddLabelToPR(ctx context.Context, number int, label string) error {
+	if m.addedLabels == nil {
+		m.addedLabels = make(map[int][]string)
+	}
+	m.addedLabels[number] = append(m.addedLabels[number], label)
+	return nil
 }
 
 func (m *mockRunner) MergePR(ctx context.Context, number int, method string) error {
@@ -493,6 +509,37 @@ func TestExecuteLLMVeto(t *testing.T) {
 	expectedCalled := []int{201, 202, 203}
 	if !slices.Equal(reviewer.calledOn, expectedCalled) {
 		t.Errorf("expected reviewer called on %v, got %v", expectedCalled, reviewer.calledOn)
+	}
+
+	// 202 should be marked with automerge:vetoed label
+	if !slices.Equal(runner.addedLabels[202], []string{vetoLabelName}) {
+		t.Errorf("expected PR 202 to have label %v, got %v", []string{vetoLabelName}, runner.addedLabels[202])
+	}
+	if !slices.Contains(runner.ensuredLabels, vetoLabelName) {
+		t.Errorf("expected ensuredLabels to contain %q, got %v", vetoLabelName, runner.ensuredLabels)
+	}
+
+	// Subsequent runs must skip already vetoed PRs without calling reviewer or spending tokens
+	reviewer.calledOn = nil
+	runner.prs = []PullRequest{
+		{
+			Number:            202,
+			Title:             "Breaking renovate PR",
+			Author:            Author{Login: "renovate[bot]"},
+			Mergeable:         "MERGEABLE",
+			StatusCheckRollup: validChecks,
+			Labels:            []Label{{Name: vetoLabelName}},
+		},
+	}
+	runner.mergedPRs = nil
+	if err := execute(context.Background(), cfg, runner, reviewer); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(reviewer.calledOn) != 0 {
+		t.Errorf("expected reviewer not to be called for vetoed PR, got %v", reviewer.calledOn)
+	}
+	if len(runner.mergedPRs) != 0 {
+		t.Errorf("expected no PRs merged, got %v", runner.mergedPRs)
 	}
 }
 
@@ -790,6 +837,13 @@ func TestCheckEligibility(t *testing.T) {
 				pr.Title = "Bump actions/checkout from 3.0.0 to 4.0.0"
 			},
 			wantReason: "disallowed dependabot bump: major update (3.0.0 -> 4.0.0)",
+		},
+		{
+			name: "veto label exists",
+			modify: func(pr *PullRequest) {
+				pr.Labels = []Label{{Name: vetoLabelName}}
+			},
+			wantReason: fmt.Sprintf("PR has %q label", vetoLabelName),
 		},
 	}
 

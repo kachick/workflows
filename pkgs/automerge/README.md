@@ -35,6 +35,7 @@ Accepting a small delay (such as running every two hours instead of immediate ev
   - Automerge is a chore workflow with fixed runner needs. It runs on `ubuntu-26.04` directly without matrix setups or different platforms.
 - **Why LLM review acts only as a final veto gatekeeper**:
   - LLM review acts strictly as a negative veto filter (default: pass) right before merging. It catches critical breaking changes or malicious code without stopping on style or test nitpicks. It never bypasses CI checks or allows ineligible pull requests to merge.
+  - When vetoed, the workflow automatically tags the pull request with an `automerge:vetoed` label. Subsequent scheduled runs skip the labeled pull request immediately without spending API tokens. If a human reviewer decides to allow it, simply removing the label will re-enable automatic merging on the next run.
   - When the API key is missing or the API request fails, the merge is safely skipped for the next scheduled run rather than failing the whole workflow.
 
 ## Usage
