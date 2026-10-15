@@ -1154,23 +1154,68 @@ func TestExtractBaseTreeAndApplyPatch(t *testing.T) {
 	if _, err := exec.LookPath("tar"); err != nil {
 		t.Skip("skipping test: tar executable not found in PATH")
 	}
-	if _, err := findRepoRoot(context.Background()); err != nil {
-		t.Skipf("skipping test: not in a git repository: %v", err)
+
+	ctx := context.Background()
+	repoDir := t.TempDir()
+	destDir := t.TempDir()
+
+	// Initialize a disposable git repository so tests never read or write host repository state
+	initCmd := exec.CommandContext(ctx, "git", "-C", repoDir, "init")
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init failed (%v): %s", err, string(out))
 	}
 
-	tmpDir := t.TempDir()
-	if err := extractBaseTree(context.Background(), tmpDir); err != nil {
+	samplePath := filepath.Join(repoDir, "sample.txt")
+	if err := os.WriteFile(samplePath, []byte("original content\n"), 0o600); err != nil {
+		t.Fatalf("failed to write sample file: %v", err)
+	}
+
+	addCmd := exec.CommandContext(ctx, "git", "-C", repoDir, "add", "sample.txt")
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed (%v): %s", err, string(out))
+	}
+
+	commitCmd := exec.CommandContext(ctx, "git", "-C", repoDir, "commit", "-m", "Initial commit")
+	commitCmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Test Runner",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test Runner",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+	)
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit failed (%v): %s", err, string(out))
+	}
+
+	if err := extractBaseTree(ctx, repoDir, destDir); err != nil {
 		t.Fatalf("extractBaseTree() failed: %v", err)
 	}
 
-	// Verify that base tree files exist
-	if _, err := os.Stat(filepath.Join(tmpDir, "go.mod")); err != nil {
-		t.Errorf("expected go.mod to exist in extracted base tree: %v", err)
+	extractedPath := filepath.Join(destDir, "sample.txt")
+	content, err := os.ReadFile(extractedPath)
+	if err != nil {
+		t.Fatalf("expected sample.txt in extracted tree: %v", err)
+	}
+	if string(content) != "original content\n" {
+		t.Errorf("expected %q, got %q", "original content\n", string(content))
 	}
 
-	// Verify empty diff apply
-	if err := applyPatch(context.Background(), tmpDir, ""); err != nil {
+	// Verify empty diff apply succeeds without modifying files
+	if err := applyPatch(ctx, destDir, ""); err != nil {
 		t.Errorf("applyPatch() with empty diff failed: %v", err)
+	}
+
+	// Verify non-empty diff apply modifies the target file
+	patch := "diff --git a/sample.txt b/sample.txt\n--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-original content\n+patched content\n"
+	if err := applyPatch(ctx, destDir, patch); err != nil {
+		t.Fatalf("applyPatch() with patch failed: %v", err)
+	}
+
+	patchedContent, err := os.ReadFile(extractedPath)
+	if err != nil {
+		t.Fatalf("failed to read patched sample.txt: %v", err)
+	}
+	if string(patchedContent) != "patched content\n" {
+		t.Errorf("expected %q, got %q", "patched content\n", string(patchedContent))
 	}
 }
 

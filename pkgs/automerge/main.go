@@ -456,16 +456,17 @@ func NewOSVScanner(baseDir string) *OSVScanner {
 }
 
 func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (bool, string, error) {
-	if !s.baseScanned {
-		dir := s.baseDir
-		if dir == "" || dir == "." {
-			root, err := findRepoRoot(ctx)
-			if err != nil {
-				return false, "", err
-			}
-			dir = root
+	repoDir := s.baseDir
+	if repoDir == "" || repoDir == "." {
+		root, err := findRepoRoot(ctx)
+		if err != nil {
+			return false, "", err
 		}
-		ids, err := scanDirectory(ctx, dir)
+		repoDir = root
+	}
+
+	if !s.baseScanned {
+		ids, err := scanDirectory(ctx, repoDir)
 		if err != nil {
 			return false, "", fmt.Errorf("osv-scanner failed on base repository: %w", err)
 		}
@@ -479,7 +480,7 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if err := extractBaseTree(ctx, tmpDir); err != nil {
+	if err := extractBaseTree(ctx, repoDir, tmpDir); err != nil {
 		return false, "", fmt.Errorf("failed to extract base tree: %w", err)
 	}
 
@@ -521,10 +522,13 @@ func findRepoRoot(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func extractBaseTree(ctx context.Context, destDir string) error {
-	repoRoot, err := findRepoRoot(ctx)
-	if err != nil {
-		return err
+func extractBaseTree(ctx context.Context, repoRoot, destDir string) error {
+	if repoRoot == "" || repoRoot == "." {
+		root, err := findRepoRoot(ctx)
+		if err != nil {
+			return err
+		}
+		repoRoot = root
 	}
 
 	archiveCmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "archive", "HEAD")
