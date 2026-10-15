@@ -467,8 +467,8 @@ Your task: Decide whether to VETO (reject/block) the merge.
 Your default decision MUST be PASS (veto: false).
 
 STRICT VETO CRITERIA (Only set veto: true if at least one of these is unequivocally met):
-1. Critical Breaking Changes: The PR description (release notes/changelog) or diff explicitly indicates an unannounced breaking change, removed major API, or severe incompatibility that will break the consumer.
-2. Malicious Code or Supply Chain Attack: Diff introduces unexpected obfuscated code, suspicious network requests to external domains, exfiltration of environment variables/secrets, or suspicious dependency swapping (e.g. typosquatting).
+1. Malicious Code or Supply Chain Attack: Diff introduces unexpected obfuscated code, suspicious network requests to external domains, exfiltration of environment variables/secrets, or suspicious dependency swapping (e.g. typosquatting).
+2. Critical Breaking Changes: The PR description (release notes/changelog) or diff explicitly indicates an unannounced breaking change, removed major API, or severe incompatibility that will break the consumer.
 
 DO NOT VETO (MUST set veto: false) for:
 - Minor updates, patch updates, or backward-compatible feature additions.
