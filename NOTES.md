@@ -43,21 +43,15 @@
 - Be willing to sacrifice immediacy (trading instant event triggers for periodic polling) to avoid unsafe secret access or broad write permissions on pull requests.
 - See [`pkgs/automerge`](pkgs/automerge/README.md) for details on this design trade-off.
 
-## Leak prevention on external sinks
+## Prevent secret leaks to PR comments and external destinations
 
-- Prioritize preventing secret exposure to external sinks over convenience.
-- GitHub Actions automatically masks registered secrets in console logs, but does not mask payloads sent to external sinks (such as pull request titles, pull request comments, commit messages, and uploaded artifacts).
-- Accidental leaks caused by implementation bugs or unexpected command outputs would immediately expose secrets to the public.
-- Verify all data sent to external sinks with `betterleaks` before posting.
-- Call `betterleaks` as an external tool wrapped by Nix (`makeWrapper`) instead of importing the Go SDK directly to keep `go.mod` free of third-party dependencies (`vendorHash = null`).
+- GitHub Actions masks registered secrets in console logs, but not in PR comments, titles, or artifacts.
+- Scan all text sent to GitHub APIs or external destinations with `betterleaks` before posting.
 
-## Do not add dry-run mode to chore workflows
+## Do not add dry-run mode to workflows
 
-- Avoid adding `dry-run` options back to chore workflows (such as `automerge` and `bump-flake-lock`).
-- A dry-run mode was previously used to test workflows on `pull_request` events.
-- However, testing workflows that require GitHub App tokens on pull requests introduces complex secret management and security risks.
-- Also, a dry-run cannot verify real end-to-end actions (such as pushing branches or merging pull requests) anyway.
-- Keeping these workflows strictly on `schedule` and `workflow_dispatch` simplifies token boundaries and keeps repositories safe.
+- Do not add `dry-run` options to workflows to keep them simple.
+- While originally considered for `automerge` and `bump-flake-lock`, dry-run modes cannot test real actions like pushing branches or merging pull requests, and they add unnecessary complexity.
 
 ## Workflows write permission trade-off
 
