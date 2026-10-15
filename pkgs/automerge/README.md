@@ -4,25 +4,21 @@ Merge eligible bot pull requests on a schedule.
 
 ## Background & Motivation
 
-Triggering automerge directly on `pull_request` events seems natural, but it creates hard dilemmas in GitHub Actions:
+For personal repositories under `kachick/*`, maintaining safe and consistent bot merges requires clear security boundaries and unified logic.
 
-- **`github.token` limitations**:
-  Merging with `github.token` requires write permissions, but GitHub prevents recursion, so merged commits on `main` will not trigger downstream workflows (such as CI or deployment).
-- **GitHub App token and secret boundaries**:
-  Using a GitHub App token solves the recursion issue, but creating it requires private keys stored in repository secrets. Automated bot pull requests cannot access secrets on `pull_request`, and using `pull_request_target` introduces severe security risks. Setting up and managing custom secrets or apps for each bot across multiple repositories is fragile and tedious.
-- **Runner time waste from waiting for status checks**:
-  A merge workflow must wait for all other status checks to finish before merging. Waiting inside actions (for example, with tools like [`kachick/wait-other-jobs`](https://github.com/kachick/wait-other-jobs)) keeps runners busy and wastes runner minutes.
-- **Maintenance cost of native auto-merge**:
-  GitHub native platform auto-merge requires enabling auto-merge and configuring exact required status check names in branch protection on every single repository.
+### Primary Goals
 
-### The Solution: Scheduled Polling
+1. **Safe and simple token management**:
+   Merging with `github.token` blocks downstream workflows (such as CI or deployment) due to GitHub event recursion limits. Passing custom GitHub App secrets into `pull_request` or using `pull_request_target` introduces high security risks. Running scheduled workflows from the default branch keeps private keys safe while creating short-lived App tokens that trigger downstream actions cleanly.
+2. **Centralized merge logic and consistency**:
+   Putting high-level merge checks (bot filtering, lockfile version inspection, OSV-Scanner diff checks, and LLM final veto) into this shared repository makes bug fixes easy and avoids differences in merge rules across individual repositories. Tailored specifically for personal repositories, this centralization enables high safety standards without per-repository setup toil.
 
-Accepting a small delay (such as running every two hours instead of immediate event triggers) cleanly resolves all these problems:
+### Byproducts of Scheduled Polling
 
-1. **Safe secret access**: Scheduled workflows run in the default branch context and can safely access repository secrets to create a GitHub App token.
-2. **Proper event chaining**: Merges made with the GitHub App token reliably trigger `main` branch workflows.
-3. **Zero waiting overhead**: The job only inspects pull requests where all status checks are already completed, finishing in seconds without keeping runners waiting.
-4. **Zero repository maintenance**: Works out of the box without configuring required status check names on each repository.
+Accepting a short schedule delay (such as checking every two hours instead of listening to direct `pull_request` webhooks) brings helpful side benefits:
+
+- **Zero waiting overhead**: The job only inspects pull requests where all status checks are already complete. It finishes in seconds without keeping runners busy waiting for other jobs (no need for tools like [`kachick/wait-other-jobs`](https://github.com/kachick/wait-other-jobs)).
+- **Zero repository maintenance**: Works out of the box without configuring required status check names in branch protection on every single repository.
 
 ## Design Choices & Intentional Limits
 
@@ -76,6 +72,8 @@ permissions:
 
 on:
   schedule:
+    # Pick a distinct minute per repository to spread out API requests
+    # e.g. run `gh api repos/:owner/:repo --jq '.id % 60'`
     - cron: '17 */2 * * *'
   workflow_dispatch:
 
@@ -101,6 +99,24 @@ jobs:
       APP_PRIVATE_KEY: ${{ secrets.SAMU_APP_PRIVATE_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 ```
+
+### Tips: Distribute Schedules Across Repositories
+
+When using this workflow across multiple repositories under the same owner, avoid using the exact same cron minute (such as `17 */2 * * *`) everywhere.
+
+- **Why**:
+  - Repositories share the same GitHub App installation and external API keys (such as `GEMINI_API_KEY`).
+  - Running scheduled workflows at the exact same minute concentrates API requests in a short window, which can hit GitHub API rate limits or Gemini API requests-per-minute (RPM) limits.
+- **How to pick a distinct minute**:
+  Pick a fixed minute (0–59) per repository based on its ID or name:
+  ```console
+  # Query repository ID and calculate minute (0-59) via GitHub CLI
+  gh api repos/:owner/:repo --jq '.id % 60'
+  ```
+  Or calculate deterministically from the repository name using Ruby:
+  ```console
+  ruby -e 'require "zlib"; puts Zlib.crc32("kachick/workflows") % 60'
+  ```
 
 ### CLI
 
