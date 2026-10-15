@@ -557,14 +557,17 @@ func scanLockfileContent(ctx context.Context, tmpDir, prefix, lockfilePath strin
 	args = append(args, "--lockfile="+targetPath)
 
 	cmd := exec.CommandContext(ctx, "osv-scanner", args...)
-	output, err := cmd.Output()
-	// osv-scanner exits with status 1 when vulnerabilities are found, but still produces valid JSON.
-	if err != nil && len(output) == 0 {
-		return nil, fmt.Errorf("osv-scanner command failed: %w", err)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	// osv-scanner exits with status 1 when vulnerabilities are found, but still produces valid JSON in stdout.
+	if err != nil && stdout.Len() == 0 {
+		return nil, fmt.Errorf("osv-scanner command failed (%w): %s", err, strings.TrimSpace(stderr.String()))
 	}
 
 	var scanOut osvScanOutput
-	if err := json.Unmarshal(output, &scanOut); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &scanOut); err != nil {
 		return nil, fmt.Errorf("failed to parse osv-scanner json output: %w", err)
 	}
 
