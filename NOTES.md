@@ -58,3 +58,8 @@
 - However, testing workflows that require GitHub App tokens on pull requests introduces complex secret management and security risks.
 - Also, a dry-run cannot verify real end-to-end actions (such as pushing branches or merging pull requests) anyway.
 - Keeping these workflows strictly on `schedule` and `workflow_dispatch` simplifies token boundaries and keeps repositories safe.
+
+## Workflows write permission trade-off
+
+- Letting Dependabot create Action update PRs avoids write permissions on creation, but merging them still requires `workflows: write`.
+- While it can easily become a vulnerability if misconfigured, keeping this permission is an intentional trade-off to automerge Actions updates, not an easy choice to drop.
