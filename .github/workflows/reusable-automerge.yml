@@ -17,10 +17,23 @@ on:
         required: false
         type: string
         default: ''
+      llm-final-veto:
+        description: 'Enable LLM-based final veto review before merging'
+        required: false
+        type: boolean
+        default: false
+      gemini-model:
+        description: 'Gemini model name for LLM final veto'
+        required: false
+        type: string
+        default: 'gemini-3.8-flash'
     secrets:
       APP_PRIVATE_KEY:
         description: 'GitHub App private key'
         required: true
+      GEMINI_API_KEY:
+        description: 'Gemini API key for LLM final veto review'
+        required: false
 
 permissions:
   contents: read
@@ -59,6 +72,9 @@ jobs:
           WORKFLOW_SHA: ${{ job.workflow_sha }}
           MERGE_METHOD: ${{ inputs.merge-method }}
           ALLOWED_BOTS: ${{ inputs.allowed-bots }}
+          LLM_FINAL_VETO: ${{ inputs.llm-final-veto }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ inputs.gemini-model }}
         run: |
           set -euo pipefail
 
@@ -70,4 +86,6 @@ jobs:
 
           nix run "${FLAKE_REF}#automerge" -- \
             --merge-method="${MERGE_METHOD}" \
-            --allowed-bots="${ALLOWED_BOTS}"
+            --allowed-bots="${ALLOWED_BOTS}" \
+            --llm-final-veto="${LLM_FINAL_VETO}" \
+            --gemini-model="${GEMINI_MODEL}"

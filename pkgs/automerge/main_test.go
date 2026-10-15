@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 )
@@ -19,12 +21,24 @@ func TestParseConfigDefaults(t *testing.T) {
 	if !slices.Equal(cfg.AllowedBots, defaultAllowedBots) {
 		t.Errorf("expected default allowed bots, got %v", cfg.AllowedBots)
 	}
+	if cfg.LLMFinalVeto {
+		t.Errorf("expected default llm-final-veto false, got %v", cfg.LLMFinalVeto)
+	}
+	if cfg.GeminiAPIKey != "" {
+		t.Errorf("expected default gemini-api-key empty, got %q", cfg.GeminiAPIKey)
+	}
+	if cfg.GeminiModel != "gemini-3.8-flash" {
+		t.Errorf("expected default gemini-model 'gemini-3.8-flash', got %q", cfg.GeminiModel)
+	}
 }
 
 func TestParseConfigFlags(t *testing.T) {
 	args := []string{
 		"--merge-method=rebase",
 		"--allowed-bots=custom-bot,another-bot",
+		"--llm-final-veto=true",
+		"--gemini-api-key=test-key",
+		"--gemini-model=custom-model",
 	}
 
 	cfg, err := parseConfig(args)
@@ -39,6 +53,15 @@ func TestParseConfigFlags(t *testing.T) {
 	if !slices.Equal(cfg.AllowedBots, expectedBots) {
 		t.Errorf("expected %v, got %v", expectedBots, cfg.AllowedBots)
 	}
+	if !cfg.LLMFinalVeto {
+		t.Errorf("expected llm-final-veto true, got %v", cfg.LLMFinalVeto)
+	}
+	if cfg.GeminiAPIKey != "test-key" {
+		t.Errorf("expected gemini-api-key 'test-key', got %q", cfg.GeminiAPIKey)
+	}
+	if cfg.GeminiModel != "custom-model" {
+		t.Errorf("expected gemini-model 'custom-model', got %q", cfg.GeminiModel)
+	}
 }
 
 func TestParseConfigInvalidMethod(t *testing.T) {
@@ -51,6 +74,9 @@ func TestParseConfigInvalidMethod(t *testing.T) {
 func TestParseConfigEnvFallback(t *testing.T) {
 	t.Setenv("MERGE_METHOD", "merge")
 	t.Setenv("ALLOWED_BOTS", "env-bot")
+	t.Setenv("LLM_FINAL_VETO", "true")
+	t.Setenv("GEMINI_API_KEY", "env-api-key")
+	t.Setenv("GEMINI_MODEL", "env-model")
 
 	cfg, err := parseConfig([]string{})
 	if err != nil {
@@ -63,6 +89,15 @@ func TestParseConfigEnvFallback(t *testing.T) {
 	expectedBots := []string{"env-bot"}
 	if !slices.Equal(cfg.AllowedBots, expectedBots) {
 		t.Errorf("expected %v, got %v", expectedBots, cfg.AllowedBots)
+	}
+	if !cfg.LLMFinalVeto {
+		t.Errorf("expected llm-final-veto from env, got %v", cfg.LLMFinalVeto)
+	}
+	if cfg.GeminiAPIKey != "env-api-key" {
+		t.Errorf("expected gemini-api-key from env, got %q", cfg.GeminiAPIKey)
+	}
+	if cfg.GeminiModel != "env-model" {
+		t.Errorf("expected gemini-model from env, got %q", cfg.GeminiModel)
 	}
 }
 
@@ -271,7 +306,9 @@ func TestIsEligible(t *testing.T) {
 
 type mockRunner struct {
 	prs        []PullRequest
+	diffs      map[int]string
 	fetchErr   error
+	diffErrOn  map[int]error
 	mergedPRs  []int
 	mergeErrOn map[int]error
 }
@@ -283,12 +320,39 @@ func (m *mockRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest, error) {
 	return m.prs, nil
 }
 
+func (m *mockRunner) FetchPRDiff(ctx context.Context, number int) (string, error) {
+	if err, ok := m.diffErrOn[number]; ok {
+		return "", err
+	}
+	if diff, ok := m.diffs[number]; ok {
+		return diff, nil
+	}
+	return "diff --git a/go.mod b/go.mod\n+example", nil
+}
+
 func (m *mockRunner) MergePR(ctx context.Context, number int, method string) error {
 	if err, ok := m.mergeErrOn[number]; ok {
 		return err
 	}
 	m.mergedPRs = append(m.mergedPRs, number)
 	return nil
+}
+
+type mockReviewer struct {
+	reviews    map[int]vetoDecision
+	reviewErrs map[int]error
+	calledOn   []int
+}
+
+func (m *mockReviewer) ReviewPR(ctx context.Context, pr PullRequest, diff string) (bool, string, error) {
+	m.calledOn = append(m.calledOn, pr.Number)
+	if err, ok := m.reviewErrs[pr.Number]; ok {
+		return false, "", err
+	}
+	if decision, ok := m.reviews[pr.Number]; ok {
+		return decision.Veto, decision.Reason, nil
+	}
+	return false, "default mock pass", nil
 }
 
 func TestExecute(t *testing.T) {
@@ -331,7 +395,7 @@ func TestExecute(t *testing.T) {
 		MergeMethod: "squash",
 	}
 
-	err := execute(context.Background(), cfg, runner)
+	err := execute(context.Background(), cfg, runner, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -346,9 +410,246 @@ func TestExecute(t *testing.T) {
 func TestExecuteNoOpenPRs(t *testing.T) {
 	runner := &mockRunner{prs: []PullRequest{}}
 	cfg := &Config{AllowedBots: defaultAllowedBots, MergeMethod: "squash"}
-	if err := execute(context.Background(), cfg, runner); err != nil {
+	if err := execute(context.Background(), cfg, runner, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestExecuteLLMVeto(t *testing.T) {
+	validChecks := []StatusCheckItem{
+		{Status: "COMPLETED", Conclusion: "SUCCESS"},
+	}
+
+	prs := []PullRequest{
+		{
+			Number:            201,
+			Title:             "Safe renovate PR",
+			Author:            Author{Login: "renovate[bot]"},
+			Mergeable:         "MERGEABLE",
+			StatusCheckRollup: validChecks,
+		},
+		{
+			Number:            202,
+			Title:             "Breaking renovate PR",
+			Author:            Author{Login: "renovate[bot]"},
+			Mergeable:         "MERGEABLE",
+			StatusCheckRollup: validChecks,
+		},
+		{
+			Number:            203,
+			Title:             "Flaky API renovate PR",
+			Author:            Author{Login: "renovate[bot]"},
+			Mergeable:         "MERGEABLE",
+			StatusCheckRollup: validChecks,
+		},
+		{
+			Number:            204,
+			Title:             "Diff error renovate PR",
+			Author:            Author{Login: "renovate[bot]"},
+			Mergeable:         "MERGEABLE",
+			StatusCheckRollup: validChecks,
+		},
+	}
+
+	runner := &mockRunner{
+		prs: prs,
+		diffErrOn: map[int]error{
+			204: errors.New("simulated git diff error"),
+		},
+	}
+
+	reviewer := &mockReviewer{
+		reviews: map[int]vetoDecision{
+			201: {Veto: false, Reason: "clean patch update"},
+			202: {Veto: true, Reason: "breaking change found in release notes"},
+		},
+		reviewErrs: map[int]error{
+			203: errors.New("gemini api 503 rate limit"),
+		},
+	}
+
+	cfg := &Config{
+		AllowedBots:  defaultAllowedBots,
+		MergeMethod:  "squash",
+		LLMFinalVeto: true,
+		GeminiAPIKey: "dummy-key",
+		GeminiModel:  "gemini-3.8-flash",
+	}
+
+	err := execute(context.Background(), cfg, runner, reviewer)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 201: pass (merged)
+	// 202: veto (skipped)
+	// 203: review error (skipped gracefully)
+	// 204: diff error (skipped gracefully)
+	expectedMerged := []int{201}
+	if !slices.Equal(runner.mergedPRs, expectedMerged) {
+		t.Errorf("expected merged PRs %v, got %v", expectedMerged, runner.mergedPRs)
+	}
+
+	expectedCalled := []int{201, 202, 203}
+	if !slices.Equal(reviewer.calledOn, expectedCalled) {
+		t.Errorf("expected reviewer called on %v, got %v", expectedCalled, reviewer.calledOn)
+	}
+}
+
+func TestExecuteLLMVetoMissingAPIKey(t *testing.T) {
+	validChecks := []StatusCheckItem{
+		{Status: "COMPLETED", Conclusion: "SUCCESS"},
+	}
+
+	runner := &mockRunner{
+		prs: []PullRequest{
+			{
+				Number:            301,
+				Title:             "Renovate PR",
+				Author:            Author{Login: "renovate[bot]"},
+				Mergeable:         "MERGEABLE",
+				StatusCheckRollup: validChecks,
+			},
+		},
+	}
+
+	cfg := &Config{
+		AllowedBots:  defaultAllowedBots,
+		MergeMethod:  "squash",
+		LLMFinalVeto: true,
+		GeminiAPIKey: "", // missing API key
+	}
+
+	err := execute(context.Background(), cfg, runner, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Merging should be skipped safely when key is missing to avoid unreviewed merges
+	if len(runner.mergedPRs) != 0 {
+		t.Errorf("expected 0 merged PRs when API key is missing, got %v", runner.mergedPRs)
+	}
+}
+
+func TestGeminiReviewerHTTP(t *testing.T) {
+	t.Run("successful approval", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				t.Errorf("expected POST, got %s", r.Method)
+			}
+			if key := r.URL.Query().Get("key"); key != "test-api-key" {
+				t.Errorf("expected key 'test-api-key', got %q", key)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"candidates": [
+					{
+						"content": {
+							"parts": [
+								{
+									"text": "{\"veto\": false, \"reason\": \"safe patch update\"}"
+								}
+							]
+						}
+					}
+				]
+			}`))
+		}))
+		defer server.Close()
+
+		reviewer := &GeminiReviewer{
+			APIKey:     "test-api-key",
+			Model:      "gemini-3.8-flash",
+			BaseURL:    server.URL,
+			HTTPClient: server.Client(),
+		}
+
+		pr := PullRequest{
+			Number: 1,
+			Title:  "Bump foo from 1.0.0 to 1.0.1",
+			Author: Author{Login: "dependabot[bot]"},
+			Body:   "Release notes: fix bug",
+		}
+
+		veto, reason, err := reviewer.ReviewPR(context.Background(), pr, "+some diff")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if veto {
+			t.Errorf("expected veto false, got true")
+		}
+		if reason != "safe patch update" {
+			t.Errorf("expected reason 'safe patch update', got %q", reason)
+		}
+	})
+
+	t.Run("successful veto", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"candidates": [
+					{
+						"content": {
+							"parts": [
+								{
+									"text": "{\"veto\": true, \"reason\": \"breaking change detected\"}"
+								}
+							]
+						}
+					}
+				]
+			}`))
+		}))
+		defer server.Close()
+
+		reviewer := &GeminiReviewer{
+			APIKey:     "test-api-key",
+			Model:      "gemini-3.8-flash",
+			BaseURL:    server.URL,
+			HTTPClient: server.Client(),
+		}
+
+		pr := PullRequest{
+			Number: 2,
+			Title:  "Bump bar from 1.0.0 to 2.0.0",
+			Author: Author{Login: "dependabot[bot]"},
+			Body:   "Breaking changes: removed foo()",
+		}
+
+		veto, reason, err := reviewer.ReviewPR(context.Background(), pr, "-foo()\n+bar()")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !veto {
+			t.Errorf("expected veto true, got false")
+		}
+		if reason != "breaking change detected" {
+			t.Errorf("expected reason 'breaking change detected', got %q", reason)
+		}
+	})
+
+	t.Run("server error returns error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("Internal Server Error"))
+		}))
+		defer server.Close()
+
+		reviewer := &GeminiReviewer{
+			APIKey:     "test-api-key",
+			Model:      "gemini-3.8-flash",
+			BaseURL:    server.URL,
+			HTTPClient: server.Client(),
+		}
+
+		pr := PullRequest{Number: 3}
+		_, _, err := reviewer.ReviewPR(context.Background(), pr, "")
+		if err == nil {
+			t.Errorf("expected error on 500, got nil")
+		}
+	})
 }
 
 func TestCheckDependabotBump(t *testing.T) {

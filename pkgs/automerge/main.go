@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var defaultAllowedBots = []string{
@@ -27,6 +31,7 @@ var dependabotBumpRegex = regexp.MustCompile(`^Bump (?P<pkg>.+) from (?P<old>[^ 
 type PullRequest struct {
 	Number            int               `json:"number"`
 	Title             string            `json:"title"`
+	Body              string            `json:"body"`
 	Author            Author            `json:"author"`
 	IsDraft           bool              `json:"isDraft"`
 	Mergeable         string            `json:"mergeable"`
@@ -43,12 +48,16 @@ type StatusCheckItem struct {
 }
 
 type Config struct {
-	AllowedBots []string
-	MergeMethod string
+	AllowedBots  []string
+	MergeMethod  string
+	LLMFinalVeto bool
+	GeminiAPIKey string
+	GeminiModel  string
 }
 
 type CommandRunner interface {
 	FetchOpenPRs(ctx context.Context) ([]PullRequest, error)
+	FetchPRDiff(ctx context.Context, number int) (string, error)
 	MergePR(ctx context.Context, number int, method string) error
 }
 
@@ -57,7 +66,7 @@ type DefaultCommandRunner struct{}
 func (r *DefaultCommandRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"--state", "open",
-		"--json", "number,title,author,isDraft,mergeable,statusCheckRollup",
+		"--json", "number,title,body,author,isDraft,mergeable,statusCheckRollup",
 	)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -73,6 +82,19 @@ func (r *DefaultCommandRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest,
 	}
 
 	return prs, nil
+}
+
+func (r *DefaultCommandRunner) FetchPRDiff(ctx context.Context, number int) (string, error) {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "diff", strconv.Itoa(number))
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to fetch pr diff: %w", err)
+	}
+
+	return stdout.String(), nil
 }
 
 func (r *DefaultCommandRunner) MergePR(ctx context.Context, number int, method string) error {
@@ -113,6 +135,9 @@ func parseConfig(args []string) (*Config, error) {
 
 	fs.StringVar(&allowedBotsRaw, "allowed-bots", "", "Comma-separated list of allowed bot logins")
 	fs.StringVar(&cfg.MergeMethod, "merge-method", "squash", "Merge method (squash, merge, or rebase)")
+	fs.BoolVar(&cfg.LLMFinalVeto, "llm-final-veto", false, "Enable LLM final veto review before merging")
+	fs.StringVar(&cfg.GeminiAPIKey, "gemini-api-key", "", "Gemini API key for LLM final veto")
+	fs.StringVar(&cfg.GeminiModel, "gemini-model", "gemini-3.8-flash", "Gemini model name for LLM final veto")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -123,6 +148,17 @@ func parseConfig(args []string) (*Config, error) {
 	}
 	if env := os.Getenv("MERGE_METHOD"); env != "" && cfg.MergeMethod == "squash" {
 		cfg.MergeMethod = env
+	}
+	if env := os.Getenv("LLM_FINAL_VETO"); env != "" && !cfg.LLMFinalVeto {
+		if val, err := strconv.ParseBool(env); err == nil {
+			cfg.LLMFinalVeto = val
+		}
+	}
+	if env := os.Getenv("GEMINI_API_KEY"); env != "" && cfg.GeminiAPIKey == "" {
+		cfg.GeminiAPIKey = env
+	}
+	if env := os.Getenv("GEMINI_MODEL"); env != "" && cfg.GeminiModel == "gemini-3.8-flash" {
+		cfg.GeminiModel = env
 	}
 
 	validMethods := map[string]bool{"squash": true, "merge": true, "rebase": true}
@@ -245,7 +281,188 @@ func filterEligible(prs []PullRequest, allowedBots []string) []PullRequest {
 	return eligible
 }
 
-func execute(ctx context.Context, cfg *Config, runner CommandRunner) error {
+const (
+	maxDiffLength = 20000
+	maxBodyLength = 10000
+)
+
+func truncateText(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "\n...[truncated]"
+}
+
+type LLMReviewer interface {
+	ReviewPR(ctx context.Context, pr PullRequest, diff string) (veto bool, reason string, err error)
+}
+
+type GeminiReviewer struct {
+	APIKey     string
+	Model      string
+	BaseURL    string
+	HTTPClient *http.Client
+}
+
+func NewGeminiReviewer(apiKey string, model string) *GeminiReviewer {
+	return &GeminiReviewer{
+		APIKey:  apiKey,
+		Model:   model,
+		BaseURL: "https://generativelanguage.googleapis.com",
+		HTTPClient: &http.Client{
+			Timeout: 60 * time.Second,
+		},
+	}
+}
+
+type geminiPart struct {
+	Text string `json:"text"`
+}
+
+type geminiContent struct {
+	Parts []geminiPart `json:"parts"`
+}
+
+type geminiSchema struct {
+	Type       string                   `json:"type"`
+	Properties map[string]*geminiSchema `json:"properties,omitempty"`
+	Required   []string                 `json:"required,omitempty"`
+}
+
+type geminiGenerationConfig struct {
+	ResponseMimeType string        `json:"responseMimeType"`
+	ResponseSchema   *geminiSchema `json:"responseSchema,omitempty"`
+}
+
+type geminiRequest struct {
+	Contents         []geminiContent        `json:"contents"`
+	GenerationConfig geminiGenerationConfig `json:"generationConfig"`
+}
+
+type geminiResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"content"`
+	} `json:"candidates"`
+	Error *struct {
+		Message string `json:"message"`
+		Code    int    `json:"code"`
+	} `json:"error,omitempty"`
+}
+
+type vetoDecision struct {
+	Veto   bool   `json:"veto"`
+	Reason string `json:"reason"`
+}
+
+func (g *GeminiReviewer) ReviewPR(ctx context.Context, pr PullRequest, diff string) (bool, string, error) {
+	if g.APIKey == "" {
+		return false, "", errors.New("GEMINI_API_KEY is empty")
+	}
+
+	truncatedBody := truncateText(pr.Body, maxBodyLength)
+	truncatedDiff := truncateText(diff, maxDiffLength)
+
+	prompt := fmt.Sprintf(`You are a senior security and compatibility reviewer acting as the final veto gatekeeper for an automated pull request merge bot.
+The pull request is already eligible according to all automated CI tests and bot filters.
+
+Your task: Decide whether to VETO (reject/block) the merge.
+Your default decision MUST be PASS (veto: false).
+
+STRICT VETO CRITERIA (Only set veto: true if at least one of these is unequivocally met):
+1. Critical Breaking Changes: The PR description (release notes/changelog) or diff explicitly indicates an unannounced breaking change, removed major API, or severe incompatibility that will break the consumer.
+2. Malicious Code or Supply Chain Attack: Diff introduces unexpected obfuscated code, suspicious network requests to external domains, exfiltration of environment variables/secrets, or suspicious dependency swapping (e.g. typosquatting).
+
+DO NOT VETO (MUST set veto: false) for:
+- Minor updates, patch updates, or backward-compatible feature additions.
+- Deprecation warnings (as long as functionality is not yet completely broken).
+- Code style, formatting, missing tests, or documentation nitpicks.
+- Normal bot updates (e.g. Dependabot bumping a minor or patch dependency version).
+
+Pull Request Title: %s
+Author: %s
+
+Pull Request Description / Changelog:
+%s
+
+Code Diff:
+%s
+`, pr.Title, pr.Author.Login, truncatedBody, truncatedDiff)
+
+	reqBody := geminiRequest{
+		Contents: []geminiContent{
+			{
+				Parts: []geminiPart{
+					{Text: prompt},
+				},
+			},
+		},
+		GenerationConfig: geminiGenerationConfig{
+			ResponseMimeType: "application/json",
+			ResponseSchema: &geminiSchema{
+				Type: "OBJECT",
+				Properties: map[string]*geminiSchema{
+					"veto":   {Type: "BOOLEAN"},
+					"reason": {Type: "STRING"},
+				},
+				Required: []string{"veto", "reason"},
+			},
+		},
+	}
+
+	jsonBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", g.BaseURL, g.Model, g.APIKey)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBytes))
+	if err != nil {
+		return false, "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := g.HTTPClient.Do(req)
+	if err != nil {
+		return false, "", fmt.Errorf("gemini api request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return false, "", fmt.Errorf("gemini api returned status %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var geminiResp geminiResponse
+	if err := json.Unmarshal(respBytes, &geminiResp); err != nil {
+		return false, "", fmt.Errorf("failed to parse gemini response: %w", err)
+	}
+
+	if geminiResp.Error != nil {
+		return false, "", fmt.Errorf("gemini api error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
+	}
+
+	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+		return false, "", errors.New("gemini api returned no candidates or content parts")
+	}
+
+	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
+	var decision vetoDecision
+	if err := json.Unmarshal([]byte(responseText), &decision); err != nil {
+		return false, "", fmt.Errorf("failed to parse decision json (%q): %w", responseText, err)
+	}
+
+	return decision.Veto, decision.Reason, nil
+}
+
+func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LLMReviewer) error {
 	prs, err := runner.FetchOpenPRs(ctx)
 	if err != nil {
 		return err
@@ -273,6 +490,33 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner) error {
 	}
 
 	for _, pr := range eligible {
+		if cfg.LLMFinalVeto {
+			if cfg.GeminiAPIKey == "" {
+				fmt.Printf("Warning: llm-final-veto is enabled, but GEMINI_API_KEY is not set. Skipping merge for PR #%d to avoid unreviewed merges.\n", pr.Number)
+				continue
+			}
+
+			fmt.Printf("Running LLM final veto review for PR #%d (%s)...\n", pr.Number, pr.Title)
+			diff, err := runner.FetchPRDiff(ctx, pr.Number)
+			if err != nil {
+				fmt.Printf("Warning: failed to fetch diff for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
+				continue
+			}
+
+			veto, reason, err := reviewer.ReviewPR(ctx, pr, diff)
+			if err != nil {
+				fmt.Printf("Warning: LLM veto review failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
+				continue
+			}
+
+			if veto {
+				fmt.Printf("PR #%d (%s): VETOED by LLM review: %s. Skipping merge.\n", pr.Number, pr.Title, reason)
+				continue
+			}
+
+			fmt.Printf("PR #%d (%s): LLM review passed: %s. Proceeding to merge.\n", pr.Number, pr.Title, reason)
+		}
+
 		fmt.Printf("Attempting to merge PR #%d (%s)...\n", pr.Number, pr.Title)
 		if err := runner.MergePR(ctx, pr.Number, cfg.MergeMethod); err != nil {
 			fmt.Printf("Failed to merge PR #%d (possibly conflicting with a prior merge). Skipping for next run: %v\n", pr.Number, err)
@@ -296,5 +540,11 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return execute(ctx, cfg, &DefaultCommandRunner{})
+
+	var reviewer LLMReviewer
+	if cfg.LLMFinalVeto {
+		reviewer = NewGeminiReviewer(cfg.GeminiAPIKey, cfg.GeminiModel)
+	}
+
+	return execute(ctx, cfg, &DefaultCommandRunner{}, reviewer)
 }

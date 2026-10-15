@@ -33,6 +33,9 @@ Accepting a small delay (such as running every two hours instead of immediate ev
   - If automatic merging is desired on personal repositories, do not require pull request reviews before merging for bot accounts in repository branch protection or rulesets.
 - **Why `runs-on` is not an input**:
   - Automerge is a chore workflow with fixed runner needs. It runs on `ubuntu-26.04` directly without matrix setups or different platforms.
+- **Why LLM review acts only as a final veto gatekeeper**:
+  - LLM review acts strictly as a negative veto filter (default: pass) right before merging. It catches critical breaking changes or malicious code without stopping on style or test nitpicks. It never bypasses CI checks or allows ineligible pull requests to merge.
+  - When the API key is missing or the API request fails, the merge is safely skipped for the next scheduled run rather than failing the whole workflow.
 
 ## Usage
 
@@ -56,6 +59,20 @@ jobs:
       app-id: ${{ vars.SAMU_APP_ID }}
     secrets:
       APP_PRIVATE_KEY: ${{ secrets.SAMU_APP_PRIVATE_KEY }}
+```
+
+### With LLM Final Veto (Optional)
+
+```yaml
+jobs:
+  automerge:
+    uses: kachick/workflows/.github/workflows/reusable-automerge.yml@main
+    with:
+      app-id: ${{ vars.SAMU_APP_ID }}
+      llm-final-veto: true
+    secrets:
+      APP_PRIVATE_KEY: ${{ secrets.SAMU_APP_PRIVATE_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 ```
 
 ### CLI
