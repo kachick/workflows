@@ -1086,14 +1086,14 @@ index 555..666 100644
 +new
 `
 	got := extractChangedLockfiles(diff)
-	want := []string{"flake.lock", "frontend/package-lock.json", "go.mod"}
+	want := []string{"frontend/package-lock.json", "go.mod"}
 	if !slices.Equal(got, want) {
 		t.Errorf("extractChangedLockfiles() = %v, want %v", got, want)
 	}
 
-	emptyGot := extractChangedLockfiles("diff --git a/main.go b/main.go\n+new")
+	emptyGot := extractChangedLockfiles("diff --git a/main.go b/main.go\n+new\ndiff --git a/go.sum b/go.sum\n+sum\ndiff --git a/flake.lock b/flake.lock\n+lock")
 	if len(emptyGot) != 0 {
-		t.Errorf("extractChangedLockfiles() for non-lockfile diff = %v, want empty", emptyGot)
+		t.Errorf("extractChangedLockfiles() for unsupported lockfiles = %v, want empty", emptyGot)
 	}
 }
 

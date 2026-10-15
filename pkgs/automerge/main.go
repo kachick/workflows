@@ -415,20 +415,21 @@ func filterEligible(prs []PullRequest, allowedBots []string) []PullRequest {
 
 var diffFileRegex = regexp.MustCompile(`(?m)^diff --git a/(\S+) b/(\S+)`)
 
+// Only include lockfiles natively extractable by `osv-scanner scan --lockfile=...`.
+// Why not flake.lock: OSV-Scanner does not support Nix flake.lock.
+// Why not go.sum: OSV-Scanner scans Go dependencies via go.mod; standalone go.sum fails extraction.
+// Why not bun.lockb: OSV-Scanner only supports text-based bun.lock, not binary bun.lockb.
 var supportedLockfileNames = map[string]bool{
 	"go.mod":            true,
-	"go.sum":            true,
 	"package-lock.json": true,
 	"yarn.lock":         true,
 	"pnpm-lock.yaml":    true,
 	"bun.lock":          true,
-	"bun.lockb":         true,
 	"Cargo.lock":        true,
 	"Gemfile.lock":      true,
 	"poetry.lock":       true,
 	"Pipfile.lock":      true,
 	"requirements.txt":  true,
-	"flake.lock":        true,
 	"composer.lock":     true,
 	"mix.lock":          true,
 }
