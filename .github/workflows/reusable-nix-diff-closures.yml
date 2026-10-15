@@ -3,6 +3,9 @@ name: '[Reusable] Nix Closure Diff'
 on:
   workflow_call:
     inputs:
+      # Exceptional input: evaluating and building Nix derivations must match
+      # the system architecture of the target repository (such as macOS or specific Linux platforms).
+      # All other reusable workflows in this repository must use fixed runners without a runs-on input.
       runs-on:
         description: 'Runner image (e.g. ubuntu-26.04)'
         required: true

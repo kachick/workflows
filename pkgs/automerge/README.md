@@ -31,8 +31,6 @@ Accepting a small delay (such as running every two hours instead of immediate ev
   - Using a separate token or app just to approve pull requests adds secret management complexity and increases security risks.
   - Having a bot approve another bot pull request adds no real security value.
   - If automatic merging is desired on personal repositories, do not require pull request reviews before merging for bot accounts in repository branch protection or rulesets.
-- **Why `runs-on` is not an input**:
-  - Automerge is a chore workflow with fixed runner needs. It runs on `ubuntu-26.04` directly without matrix setups or different platforms.
 - **Why LLM review acts only as a final veto gatekeeper**:
   - LLM review acts strictly as a negative veto filter (default: pass) right before merging. It catches critical breaking changes or malicious code without stopping on style or test nitpicks. It never bypasses CI checks or allows ineligible pull requests to merge.
   - When vetoed, the workflow automatically tags the pull request with an `automerge:vetoed` label. Subsequent scheduled runs skip the labeled pull request immediately without spending API tokens. If a human reviewer decides to allow it, simply removing the label will re-enable automatic merging on the next run.

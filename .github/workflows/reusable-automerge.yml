@@ -41,7 +41,6 @@ permissions:
 jobs:
   automerge:
     name: Automerge
-    # Use fixed runner image for internal chore workflows as documented in NOTES.md
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:

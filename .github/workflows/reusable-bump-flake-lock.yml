@@ -43,7 +43,6 @@ permissions:
 jobs:
   bump:
     name: Bump flake.lock
-    # Use fixed runner image for internal chore workflows as documented in NOTES.md
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:

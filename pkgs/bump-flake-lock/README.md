@@ -4,11 +4,6 @@ Update `flake.lock` and create a pull request with GitHub App.
 
 Optionally runs a command after `flake.lock` is updated (for example, to update related CI dependencies) and commits the generated changes before opening the pull request.
 
-## Design Choices & Intentional Limits
-
-- **Why `runs-on` is not an input**:
-  - `bump-flake-lock` is a chore workflow with fixed runner needs. It runs on `ubuntu-26.04` directly without matrix setups or different platforms.
-
 ## Usage
 
 ### Reusable Workflow

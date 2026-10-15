@@ -32,11 +32,6 @@
 - Reusable workflows run in the caller repository context, so local scripts cannot be called directly.
 - Keep helper scripts inside Nix packages and run them via `nix run` so external repositories can fetch them.
 
-## Runner selection for reusable workflows
-
-- Chore workflows (such as `bump-flake-lock` and `automerge`) use a fixed runner image (`ubuntu-26.04`) because they are for personal use and do not need matrix or different environments.
-- Workflows that inspect or build repository-specific Nix targets (like `nix-diff-closures`) accept `runs-on` as an input to match the target repository architecture.
-
 ## Language selection
 
 - Any language is acceptable if bashless requirements are met.
