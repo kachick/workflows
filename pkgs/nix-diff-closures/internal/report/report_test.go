@@ -185,4 +185,28 @@ func TestBuildReport(t *testing.T) {
 			t.Fatalf("expected fallback text %q in comment, got: %s", expectedFallback, rep.CommentMarkdown)
 		}
 	})
+
+	t.Run("escapes HTML in target name and fences error output safely", func(t *testing.T) {
+		results := []TargetResult{
+			{
+				Target:   "packages.x86_64-linux.<script>",
+				DiffText: "pkg: 1.0 → 2.0\n",
+			},
+			{
+				Target: "devShells.x86_64-linux.broken",
+				Error:  "evaluation failed: unexpected </details> and ``` in trace",
+			},
+		}
+
+		rep, err := Build(results, 1000, 500, completeMeta, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(rep.CommentMarkdown, "<summary><b>packages.x86_64-linux.&lt;script&gt;</b> (changed)</summary>") {
+			t.Errorf("expected escaped target name in summary, got:\n%s", rep.CommentMarkdown)
+		}
+		if !strings.Contains(rep.CommentMarkdown, "````text\nError: evaluation failed: unexpected </details> and ``` in trace\n````") {
+			t.Errorf("expected 4-backtick code fence around error containing 3 backticks, got:\n%s", rep.CommentMarkdown)
+		}
+	})
 }

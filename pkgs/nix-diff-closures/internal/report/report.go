@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"html"
 	"strings"
 	"unicode/utf8"
 
@@ -98,30 +99,32 @@ func Build(results []TargetResult, maxSize int, headSize int, meta workflowmeta.
 
 	// Format each target
 	for _, res := range results {
+		escapedTarget := html.EscapeString(res.Target)
 		if res.Error != "" {
-			md.WriteString(fmt.Sprintf("<details open>\n<summary><b>%s</b> (error)</summary>\n\n", res.Target))
-			md.WriteString(fmt.Sprintf("Error: %s\n", res.Error))
+			fence := codeFenceFor(res.Error)
+			md.WriteString(fmt.Sprintf("<details open>\n<summary><b>%s</b> (error)</summary>\n\n", escapedTarget))
+			md.WriteString(fmt.Sprintf("%stext\nError: %s\n%s\n", fence, strings.TrimRight(res.Error, "\n"), fence))
 			md.WriteString("</details>\n\n")
 			continue
 		}
 
 		if res.NoChange || res.DiffText == "" {
-			md.WriteString(fmt.Sprintf("<details>\n<summary><b>%s</b> (unchanged)</summary>\n\n", res.Target))
+			md.WriteString(fmt.Sprintf("<details>\n<summary><b>%s</b> (unchanged)</summary>\n\n", escapedTarget))
 			md.WriteString("No closure differences found.\n")
 			md.WriteString("</details>\n\n")
 			continue
 		}
-
-		md.WriteString(fmt.Sprintf("<details open>\n<summary><b>%s</b> (changed)</summary>\n\n", res.Target))
-		md.WriteString("```text\n")
 
 		displayText := res.DiffText
 		if isTruncated {
 			displayText = TruncateUTF8Safe(res.DiffText, headSize/len(results))
 		}
 
+		fence := codeFenceFor(displayText)
+		md.WriteString(fmt.Sprintf("<details open>\n<summary><b>%s</b> (changed)</summary>\n\n", escapedTarget))
+		md.WriteString(fence + "text\n")
 		md.WriteString(strings.TrimRight(displayText, "\n"))
-		md.WriteString("\n```\n")
+		md.WriteString("\n" + fence + "\n")
 
 		if isTruncated && len(displayText) < len(res.DiffText) {
 			md.WriteString("... (truncated)\n")
@@ -136,6 +139,14 @@ func Build(results []TargetResult, maxSize int, headSize int, meta workflowmeta.
 		HasDiff:         true,
 		IsTruncated:     isTruncated,
 	}, nil
+}
+
+func codeFenceFor(s string) string {
+	fence := "```"
+	for strings.Contains(s, fence) {
+		fence += "`"
+	}
+	return fence
 }
 
 // TruncateUTF8Safe cuts text safely at rune boundaries and prefers line boundaries.
