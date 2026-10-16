@@ -14,5 +14,7 @@ jobs:
     uses: $/.github/workflows/reusable-automerge.yml
     with:
       app-id: ${{ vars.SAMU_APP_ID }}
+      llm-veto: true
     secrets:
       APP_PRIVATE_KEY: ${{ secrets.SAMU_APP_PRIVATE_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
