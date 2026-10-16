@@ -1114,6 +1114,23 @@ func (g *GeminiReviewer) ReviewPR(ctx context.Context, pr PullRequest, diff stri
 	return veto, reason, nil
 }
 
+// formatAuthor formats author names for GitHub Markdown summary tables.
+// Mention syntax (@name) works for humans, but GitHub Markdown does not linkify
+// @app/slug or @slug[bot]. Also, github.com/slug[bot] returns 404.
+// Linking to https://github.com/apps/slug matches GitHub official app URLs
+// and avoids mention conflicts with human accounts of the same name.
+func formatAuthor(author string) string {
+	if author == "" {
+		return ""
+	}
+	if strings.HasPrefix(author, "app/") || strings.HasSuffix(author, "[bot]") {
+		slug := strings.TrimPrefix(author, "app/")
+		slug = strings.TrimSuffix(slug, "[bot]")
+		return fmt.Sprintf("[%s[bot]](https://github.com/apps/%s)", slug, slug)
+	}
+	return "@" + author
+}
+
 func buildStepSummary(results []PRSummaryResult, meta workflowmeta.Metadata) string {
 	if len(results) == 0 {
 		return "### 🤖 Automerge Summary\n\nNo open pull requests found.\n"
@@ -1151,7 +1168,7 @@ func buildStepSummary(results []PRSummaryResult, meta workflowmeta.Metadata) str
 
 		cleanReason := strings.ReplaceAll(r.Reason, "|", `\|`)
 		cleanReason = strings.ReplaceAll(cleanReason, "\n", " ")
-		sb.WriteString(fmt.Sprintf("| %s | @%s | %s | %s |\n", prLink, r.Author, icon, cleanReason))
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n", prLink, formatAuthor(r.Author), icon, cleanReason))
 	}
 
 	return sb.String()

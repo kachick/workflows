@@ -1683,7 +1683,7 @@ func TestBuildStepSummary(t *testing.T) {
 			{
 				Number: 3,
 				Title:  "Vetoed update",
-				Author: "renovate[bot]",
+				Author: "app/renovate",
 				Action: ActionVetoed,
 				Reason: "suspicious code",
 			},
@@ -1694,22 +1694,55 @@ func TestBuildStepSummary(t *testing.T) {
 				Action: ActionSkipped,
 				Reason: "status check pending",
 			},
+			{
+				Number: 5,
+				Title:  "Human PR",
+				Author: "kachick",
+				Action: ActionSkipped,
+				Reason: "not in allowed bots",
+			},
 		}
 
 		summary := buildStepSummary(results, meta)
-		if !strings.Contains(summary, "| [#1](https://github.com/kachick/workflows/pull/1) Update foo \\| bar | @renovate[bot] | ✅ Merged | merged successfully |") {
+		if !strings.Contains(summary, "| [#1](https://github.com/kachick/workflows/pull/1) Update foo \\| bar | [renovate[bot]](https://github.com/apps/renovate) | ✅ Merged | merged successfully |") {
 			t.Errorf("expected merged row in summary, got:\n%s", summary)
 		}
-		if !strings.Contains(summary, "| [#2](https://github.com/kachick/workflows/pull/2) Major update | @dependabot[bot] | ⚠️ Blocked | major update (1.0 -> 2.0) |") {
+		if !strings.Contains(summary, "| [#2](https://github.com/kachick/workflows/pull/2) Major update | [dependabot[bot]](https://github.com/apps/dependabot) | ⚠️ Blocked | major update (1.0 -> 2.0) |") {
 			t.Errorf("expected blocked row in summary, got:\n%s", summary)
 		}
-		if !strings.Contains(summary, "| [#3](https://github.com/kachick/workflows/pull/3) Vetoed update | @renovate[bot] | 🚫 Vetoed | suspicious code |") {
+		if !strings.Contains(summary, "| [#3](https://github.com/kachick/workflows/pull/3) Vetoed update | [renovate[bot]](https://github.com/apps/renovate) | 🚫 Vetoed | suspicious code |") {
 			t.Errorf("expected vetoed row in summary, got:\n%s", summary)
 		}
-		if !strings.Contains(summary, "| [#4](https://github.com/kachick/workflows/pull/4) Pending checks | @samuebot[bot] | ⏭️ Skipped (transient) | status check pending |") {
+		if !strings.Contains(summary, "| [#4](https://github.com/kachick/workflows/pull/4) Pending checks | [samuebot[bot]](https://github.com/apps/samuebot) | ⏭️ Skipped (transient) | status check pending |") {
 			t.Errorf("expected skipped row in summary, got:\n%s", summary)
 		}
+		if !strings.Contains(summary, "| [#5](https://github.com/kachick/workflows/pull/5) Human PR | @kachick | ⏭️ Skipped (transient) | not in allowed bots |") {
+			t.Errorf("expected human row in summary, got:\n%s", summary)
+		}
 	})
+}
+
+func TestFormatAuthor(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{input: "app/samuebot", expected: "[samuebot[bot]](https://github.com/apps/samuebot)"},
+		{input: "samuebot[bot]", expected: "[samuebot[bot]](https://github.com/apps/samuebot)"},
+		{input: "app/renovate", expected: "[renovate[bot]](https://github.com/apps/renovate)"},
+		{input: "renovate[bot]", expected: "[renovate[bot]](https://github.com/apps/renovate)"},
+		{input: "app/dependabot", expected: "[dependabot[bot]](https://github.com/apps/dependabot)"},
+		{input: "dependabot[bot]", expected: "[dependabot[bot]](https://github.com/apps/dependabot)"},
+		{input: "kachick", expected: "@kachick"},
+		{input: "", expected: ""},
+	}
+
+	for _, tt := range tests {
+		got := formatAuthor(tt.input)
+		if got != tt.expected {
+			t.Errorf("formatAuthor(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
 }
 
 func TestExecuteWritesStepSummary(t *testing.T) {
