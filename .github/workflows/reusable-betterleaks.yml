@@ -26,8 +26,10 @@ jobs:
           CLI_VERSION: ${{ inputs.betterleaks-version }}
         # Prefer the gh command over curl to avoid hitting GitHub API rate limits
         run: |
-          gh release download "v${CLI_VERSION}" --skip-existing --repo betterleaks/betterleaks --pattern '*_linux_x64.*' --pattern 'checksums.txt'
-          sha256sum --check --ignore-missing checksums.txt
+          set -euo pipefail
+          ARCHIVE="betterleaks_${CLI_VERSION}_linux_x64.tar.gz"
+          gh release download "v${CLI_VERSION}" --skip-existing --repo betterleaks/betterleaks --pattern "${ARCHIVE}" --pattern 'checksums.txt'
+          grep --fixed-strings "  ${ARCHIVE}" checksums.txt | sha256sum --check -
 
       - name: Install
         working-directory: ${{ runner.temp }}
