@@ -881,6 +881,11 @@ func TestCheckDependabotBump(t *testing.T) {
 			wantReason: "major update (14 -> 15)",
 		},
 		{
+			title:      "Bump ghcr.io/kachick/ubuntu-26.04-nix-systemd from `99230df` to `8297d9b`",
+			disallowed: false,
+			wantReason: "allowed digest update",
+		},
+		{
 			title:      "Bump the rust group with 2 updates",
 			disallowed: true,
 			wantReason: "unrecognized title format or group update",
@@ -1101,6 +1106,12 @@ func TestCheckRenovateBump(t *testing.T) {
 			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [cachix/cachix-action](https://example.com) | major | `14` → `15` |\n",
 			disallowed: true,
 			wantReason: "major update (14 -> 15)",
+		},
+		{
+			name:       "container digest update with type column",
+			body:       "This PR contains the following updates:\n\n| Package | Type | Update | Change |\n|---|---|---|---|\n| ghcr.io/kachick/ubuntu-26.04-nix-systemd | final | digest | `99230df` → `8297d9b` |\n",
+			disallowed: false,
+			wantReason: "allowed digest update",
 		},
 		{
 			name:       "unlinked package name",

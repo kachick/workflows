@@ -32,7 +32,8 @@ var defaultAllowedBots = []string{
 
 var (
 	dependabotBumpRegex   = regexp.MustCompile(`^Bump (?P<pkg>.+) from (?P<old>[^ ]+) to (?P<new>[^ ]+)(?: in .+)?$`)
-	renovateTableRowRegex = regexp.MustCompile(`(?m)^\|\s*(?:\[(?P<pkg>[^\]]+)\]\([^)]+\)|(?P<rawpkg>[^|]+?))\s*\|.*?` + "`(?P<old>[^`]+)`" + `\s*(?:→|->)\s*` + "`(?P<new>[^`]+)`")
+	renovateTableRowRegex = regexp.MustCompile(`(?m)^\|\s*(?:\[(?P<pkg>[^\]]+)\]\([^)]+\)|(?P<rawpkg>[^|]+?))\s*\|(?:[^|\n]*\|)*?\s*(?:(?P<update>[a-zA-Z]+)\s*\|\s*)?[^|\n]*?` + "`(?P<old>[^`]+)`" + `\s*(?:→|->)\s*` + "`(?P<new>[^`]+)`")
+	hexDigestRegex        = regexp.MustCompile(`^(?:sha256:)?[0-9a-f]{7,64}$`)
 )
 
 const (
@@ -285,6 +286,21 @@ func checkVersionBump(pkg, oldVer, newVer string) (disallowed bool, reason strin
 	return false, "non-breaking update"
 }
 
+// Why not query OCI registries (e.g. via skopeo) to verify digest updates:
+//  1. PR titles and tables only contain 7-char short hashes (such as 99230df), which OCI Registry APIs
+//     cannot resolve without parsing full 64-char sha256 digests from the diff. Git commit hashes are also not OCI images.
+//  2. OCI version labels (org.opencontainers.image.version) are optional, and reproducible builds like Nix
+//     often fix image creation timestamps to 1970-01-01.
+//  3. Old digests may be garbage-collected by registries, or blocked by registry auth and rate limits.
+//  4. When an image tag itself changes (such as 24.04 to 26.04 or v1 to v2), Renovate and Dependabot classify it
+//     as a regular version update (major). A digest update only happens when the tracked tag stays the same
+//     (see https://github.com/kachick/dotfiles/pull/1741#issuecomment-6205173992).
+func isDigestBump(oldVer, newVer string) bool {
+	cleanOld := strings.Trim(oldVer, "`")
+	cleanNew := strings.Trim(newVer, "`")
+	return hexDigestRegex.MatchString(cleanOld) && hexDigestRegex.MatchString(cleanNew)
+}
+
 func checkDependabotBump(title string) (disallowed bool, reason string) {
 	matches := dependabotBumpRegex.FindStringSubmatch(title)
 	if matches == nil {
@@ -297,8 +313,12 @@ func checkDependabotBump(title string) (disallowed bool, reason string) {
 	newIndex := dependabotBumpRegex.SubexpIndex("new")
 
 	pkg := matches[pkgIndex]
-	oldVer := matches[oldIndex]
-	newVer := matches[newIndex]
+	oldVer := strings.Trim(matches[oldIndex], "`")
+	newVer := strings.Trim(matches[newIndex], "`")
+
+	if isDigestBump(oldVer, newVer) {
+		return false, "allowed digest update"
+	}
 
 	return checkVersionBump(pkg, oldVer, newVer)
 }
@@ -322,6 +342,7 @@ func checkRenovateBump(body string) (disallowed bool, reason string) {
 
 	pkgIndex := renovateTableRowRegex.SubexpIndex("pkg")
 	rawpkgIndex := renovateTableRowRegex.SubexpIndex("rawpkg")
+	updateIndex := renovateTableRowRegex.SubexpIndex("update")
 	oldIndex := renovateTableRowRegex.SubexpIndex("old")
 	newIndex := renovateTableRowRegex.SubexpIndex("new")
 
@@ -331,8 +352,14 @@ func checkRenovateBump(body string) (disallowed bool, reason string) {
 		if pkg == "" {
 			pkg = strings.TrimSpace(match[rawpkgIndex])
 		}
+		update := strings.TrimSpace(match[updateIndex])
 		oldVer := match[oldIndex]
 		newVer := match[newIndex]
+
+		if update == "digest" || update == "pinDigest" || (update != "major" && isDigestBump(oldVer, newVer)) {
+			lastReason = "allowed digest update"
+			continue
+		}
 
 		disallowed, reason := checkVersionBump(pkg, oldVer, newVer)
 		if disallowed {
