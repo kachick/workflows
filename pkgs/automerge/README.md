@@ -11,7 +11,7 @@ For personal repositories under `kachick/*`, maintaining safe and consistent bot
 1. **Safe and simple token management**:
    Merging with `github.token` blocks downstream workflows (such as CI or deployment) due to GitHub event recursion limits. Passing custom GitHub App secrets into `pull_request` or using `pull_request_target` introduces high security risks. Running scheduled workflows from the default branch keeps private keys safe while creating short-lived App tokens that trigger downstream actions cleanly.
 2. **Centralized merge logic and consistency**:
-   Putting high-level merge checks (bot filtering, lockfile version inspection, OSV-Scanner diff checks, and LLM final veto) into this shared repository makes bug fixes easy and avoids differences in merge rules across individual repositories. Tailored specifically for personal repositories, this centralization enables high safety standards without per-repository setup toil.
+   Putting high-level merge checks (bot filtering, lockfile version inspection, OSV-Scanner diff checks, and LLM veto) into this shared repository makes bug fixes easy and avoids differences in merge rules across individual repositories. Tailored specifically for personal repositories, this centralization enables high safety standards without per-repository setup toil.
 
 ### Byproducts of Scheduled Polling
 
@@ -38,7 +38,7 @@ Accepting a short schedule delay (such as checking every two hours instead of li
   - Policy blocks (such as major version bumps or group updates) cannot merge without human approval. Labeling these pull requests with `automerge:blocked` allows easy cross-repository filtering (`user:kachick is:pr is:open label:automerge:blocked`) without failing the workflow or creating awkward review rejections.
 - **Why automerge writes a Step Summary**:
   - Actions Step Summary provides a clear overview of all inspected pull requests and their results (merged, blocked, vetoed, or skipped) directly in the Actions UI, without digging through runner logs or failing the workflow.
-- **Why LLM review acts only as a final veto gatekeeper**:
+- **Why LLM review acts only as a veto gatekeeper**:
   - LLM review acts strictly as a negative veto filter right before merging. Gemini inspects the diff and PR description for security risks and breaking changes with severity levels, and code logic decides whether to veto the merge. It never bypasses CI checks or allows ineligible pull requests to merge.
   - When vetoed, the workflow automatically tags the pull request with an `automerge:vetoed` label. Subsequent scheduled runs skip the labeled pull request immediately without spending API tokens. If a human reviewer decides to allow it, simply removing the label will re-enable automatic merging on the next run.
   - When the API key is missing or the API request fails, the merge is safely skipped for the next scheduled run rather than failing the whole workflow.
@@ -48,13 +48,13 @@ Accepting a short schedule delay (such as checking every two hours instead of li
 When modifying or extending the automerge workflow, preserve the following invariants:
 
 1. **Negative Veto Only (Never Invert to Positive Allow)**:
-   - The review acts strictly as a final **negative veto filter** after all deterministic rules pass (bot verification, draft exclusion, completed green CI checks, and version bump rules).
+   - The review acts strictly as a **negative veto filter** after all deterministic rules pass (bot verification, draft exclusion, completed green CI checks, and version bump rules).
    - **Critical Warning**: Never invert this flow to an "allow" model (e.g. merging because an LLM approved it, or letting a review bypass failing CI checks). An inverted flow makes prompt injection or hallucinations directly cause unauthorized merges and supply chain attacks.
 
 2. **Negative Labeling for Idempotency (`automerge:vetoed`)**:
    - The label `automerge:vetoed` is strictly a negative filter to skip future runs and save tokens.
    - Because it only denies actions, manipulating the label cannot cause an unauthorized merge:
-     - If the label is removed, all deterministic checks and the final veto review run again.
+     - If the label is removed, all deterministic checks and the LLM veto review run again.
      - If the label is forged or added mistakenly, merging is merely postponed (temporary denial of service, never privilege escalation).
    - **Critical Warning**: Never introduce positive labels (e.g. `automerge:approved`) to authorize merges, because labels can be modified by bots or branch contributors.
 
@@ -93,7 +93,7 @@ jobs:
       APP_PRIVATE_KEY: ${{ secrets.SAMU_APP_PRIVATE_KEY }}
 ```
 
-### With LLM Final Veto (Optional)
+### With LLM Veto (Optional)
 
 ```yaml
 jobs:
@@ -101,7 +101,7 @@ jobs:
     uses: kachick/workflows/.github/workflows/reusable-automerge.yml@main
     with:
       app-id: ${{ vars.SAMU_APP_ID }}
-      llm-final-veto: true
+      llm-veto: true
     secrets:
       APP_PRIVATE_KEY: ${{ secrets.SAMU_APP_PRIVATE_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

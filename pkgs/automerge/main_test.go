@@ -28,8 +28,8 @@ func TestParseConfigDefaults(t *testing.T) {
 	if !slices.Equal(cfg.AllowedBots, defaultAllowedBots) {
 		t.Errorf("expected default allowed bots, got %v", cfg.AllowedBots)
 	}
-	if cfg.LLMFinalVeto {
-		t.Errorf("expected default llm-final-veto false, got %v", cfg.LLMFinalVeto)
+	if cfg.LLMVeto {
+		t.Errorf("expected default llm-veto false, got %v", cfg.LLMVeto)
 	}
 	if cfg.GeminiAPIKey != "" {
 		t.Errorf("expected default gemini-api-key empty, got %q", cfg.GeminiAPIKey)
@@ -43,7 +43,7 @@ func TestParseConfigFlags(t *testing.T) {
 	args := []string{
 		"--merge-method=rebase",
 		"--allowed-bots=custom-bot,another-bot",
-		"--llm-final-veto=true",
+		"--llm-veto=true",
 		"--gemini-api-key=test-key",
 		"--gemini-model=custom-model",
 	}
@@ -60,8 +60,8 @@ func TestParseConfigFlags(t *testing.T) {
 	if !slices.Equal(cfg.AllowedBots, expectedBots) {
 		t.Errorf("expected %v, got %v", expectedBots, cfg.AllowedBots)
 	}
-	if !cfg.LLMFinalVeto {
-		t.Errorf("expected llm-final-veto true, got %v", cfg.LLMFinalVeto)
+	if !cfg.LLMVeto {
+		t.Errorf("expected llm-veto true, got %v", cfg.LLMVeto)
 	}
 	if cfg.GeminiAPIKey != "test-key" {
 		t.Errorf("expected gemini-api-key 'test-key', got %q", cfg.GeminiAPIKey)
@@ -81,7 +81,7 @@ func TestParseConfigInvalidMethod(t *testing.T) {
 func TestParseConfigEnvFallback(t *testing.T) {
 	t.Setenv("MERGE_METHOD", "merge")
 	t.Setenv("ALLOWED_BOTS", "env-bot")
-	t.Setenv("LLM_FINAL_VETO", "true")
+	t.Setenv("LLM_VETO", "true")
 	t.Setenv("GEMINI_API_KEY", "env-api-key")
 	t.Setenv("GEMINI_MODEL", "env-model")
 
@@ -97,8 +97,8 @@ func TestParseConfigEnvFallback(t *testing.T) {
 	if !slices.Equal(cfg.AllowedBots, expectedBots) {
 		t.Errorf("expected %v, got %v", expectedBots, cfg.AllowedBots)
 	}
-	if !cfg.LLMFinalVeto {
-		t.Errorf("expected llm-final-veto from env, got %v", cfg.LLMFinalVeto)
+	if !cfg.LLMVeto {
+		t.Errorf("expected llm-veto from env, got %v", cfg.LLMVeto)
 	}
 	if cfg.GeminiAPIKey != "env-api-key" {
 		t.Errorf("expected gemini-api-key from env, got %q", cfg.GeminiAPIKey)
@@ -556,7 +556,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 	cfg := &Config{
 		AllowedBots:  defaultAllowedBots,
 		MergeMethod:  "squash",
-		LLMFinalVeto: true,
+		LLMVeto:      true,
 		GeminiAPIKey: "dummy-key",
 		GeminiModel:  "gemini-3.8-flash",
 	}
@@ -634,7 +634,7 @@ func TestExecuteLLMVetoMissingAPIKey(t *testing.T) {
 	cfg := &Config{
 		AllowedBots:  defaultAllowedBots,
 		MergeMethod:  "squash",
-		LLMFinalVeto: true,
+		LLMVeto:      true,
 		GeminiAPIKey: "", // missing API key
 	}
 
@@ -1270,7 +1270,7 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 	cfg := &Config{
 		AllowedBots:  defaultAllowedBots,
 		MergeMethod:  "squash",
-		LLMFinalVeto: true,
+		LLMVeto:      true,
 		GeminiAPIKey: "dummy-key",
 		GeminiModel:  "gemini-flash-latest",
 		OSVScanner:   true,

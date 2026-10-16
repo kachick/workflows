@@ -96,7 +96,7 @@ type StatusCheckItem struct {
 type Config struct {
 	AllowedBots  []string
 	MergeMethod  string
-	LLMFinalVeto bool
+	LLMVeto      bool
 	GeminiAPIKey string
 	GeminiModel  string
 	OSVScanner   bool
@@ -214,9 +214,9 @@ func parseConfig(args []string) (*Config, error) {
 
 	fs.StringVar(&allowedBotsRaw, "allowed-bots", "", "Comma-separated list of allowed bot logins")
 	fs.StringVar(&cfg.MergeMethod, "merge-method", "squash", "Merge method (squash, merge, or rebase)")
-	fs.BoolVar(&cfg.LLMFinalVeto, "llm-final-veto", false, "Enable LLM final veto review before merging")
-	fs.StringVar(&cfg.GeminiAPIKey, "gemini-api-key", "", "Gemini API key for LLM final veto")
-	fs.StringVar(&cfg.GeminiModel, "gemini-model", "gemini-flash-latest", "Gemini model name for LLM final veto")
+	fs.BoolVar(&cfg.LLMVeto, "llm-veto", false, "Enable LLM veto review before merging")
+	fs.StringVar(&cfg.GeminiAPIKey, "gemini-api-key", "", "Gemini API key for LLM veto")
+	fs.StringVar(&cfg.GeminiModel, "gemini-model", "gemini-flash-latest", "Gemini model name for LLM veto")
 	fs.BoolVar(&cfg.OSVScanner, "osv-scanner", true, "Enable OSV-Scanner diff check before merging")
 
 	if err := fs.Parse(args); err != nil {
@@ -229,9 +229,9 @@ func parseConfig(args []string) (*Config, error) {
 	if env := os.Getenv("MERGE_METHOD"); env != "" && cfg.MergeMethod == "squash" {
 		cfg.MergeMethod = env
 	}
-	if env := os.Getenv("LLM_FINAL_VETO"); env != "" && !cfg.LLMFinalVeto {
+	if env := os.Getenv("LLM_VETO"); env != "" && !cfg.LLMVeto {
 		if val, err := strconv.ParseBool(env); err == nil {
-			cfg.LLMFinalVeto = val
+			cfg.LLMVeto = val
 		}
 	}
 	if env := os.Getenv("GEMINI_API_KEY"); env != "" && cfg.GeminiAPIKey == "" {
@@ -1036,9 +1036,9 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 			fmt.Printf("PR #%d (%s): vulnerability scan passed: %s.\n", pr.Number, pr.Title, reason)
 		}
 
-		if cfg.LLMFinalVeto {
+		if cfg.LLMVeto {
 			if cfg.GeminiAPIKey == "" {
-				fmt.Printf("Warning: llm-final-veto is enabled, but GEMINI_API_KEY is not set. Skipping merge for PR #%d to avoid unreviewed merges.\n", pr.Number)
+				fmt.Printf("Warning: llm-veto is enabled, but GEMINI_API_KEY is not set. Skipping merge for PR #%d to avoid unreviewed merges.\n", pr.Number)
 				summaries = append(summaries, PRSummaryResult{
 					Number: pr.Number,
 					Title:  pr.Title,
@@ -1049,7 +1049,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 				continue
 			}
 
-			fmt.Printf("Running final veto review for PR #%d (%s)...\n", pr.Number, pr.Title)
+			fmt.Printf("Running LLM veto review for PR #%d (%s)...\n", pr.Number, pr.Title)
 			veto, reason, err := reviewer.ReviewPR(ctx, pr, diff)
 			if err != nil {
 				fmt.Printf("Warning: veto review failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
@@ -1136,7 +1136,7 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	var reviewer LLMReviewer
-	if cfg.LLMFinalVeto {
+	if cfg.LLMVeto {
 		reviewer = NewGeminiReviewer(cfg.GeminiAPIKey, cfg.GeminiModel)
 	}
 
