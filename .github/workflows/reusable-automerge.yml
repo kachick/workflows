@@ -43,7 +43,7 @@ jobs:
     name: Automerge
     if: github.repository_owner == 'kachick' # Specialized for personal use; skip on forks and other owners
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 60
     steps:
       - name: Generate GitHub Apps token
         id: publish-token

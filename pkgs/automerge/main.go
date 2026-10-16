@@ -688,7 +688,10 @@ func scanDirectory(ctx context.Context, dir, configFile string) ([]string, error
 }
 
 const (
-	// 50 KiB (~12k tokens) fits most lockfile updates in full at negligible Flash token cost.
+	// Why 50 KiB (~12k tokens) instead of the full 1M token context window:
+	// 50 KiB fits normal flake.lock updates in full at negligible Flash token cost,
+	// while avoiding hundreds of KiB of checksum noise (such as huge package-lock.json diffs)
+	// that would dilute LLM attention on actual code and workflow changes.
 	maxDiffLength = 50 * 1024
 	maxBodyLength = 10000
 )
