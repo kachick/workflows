@@ -106,6 +106,7 @@ type Config struct {
 
 type CommandRunner interface {
 	FetchOpenPRs(ctx context.Context) ([]PullRequest, error)
+	FetchPR(ctx context.Context, number int) (*PullRequest, error)
 	FetchPRDiff(ctx context.Context, number int) (string, error)
 	EnsureLabel(ctx context.Context, name, description, color string) error
 	AddLabelToPR(ctx context.Context, number int, label string) error
@@ -134,6 +135,26 @@ func (r *DefaultCommandRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest,
 	}
 
 	return prs, nil
+}
+
+func (r *DefaultCommandRunner) FetchPR(ctx context.Context, number int) (*PullRequest, error) {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "view", strconv.Itoa(number),
+		"--json", "number,title,body,author,isDraft,mergeable,statusCheckRollup,labels,baseRefName",
+	)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("failed to fetch pr: %w", err)
+	}
+
+	var pr PullRequest
+	if err := json.Unmarshal(stdout.Bytes(), &pr); err != nil {
+		return nil, fmt.Errorf("failed to parse pr json: %w", err)
+	}
+
+	return &pr, nil
 }
 
 func (r *DefaultCommandRunner) FetchPRDiff(ctx context.Context, number int) (string, error) {
@@ -433,7 +454,16 @@ func checkEligibility(pr PullRequest, allowedBots []string) EligibilityResult {
 		return EligibilityResult{Eligible: false, Blocked: false, Reason: "PR is a draft"}
 	}
 	if pr.Mergeable != "MERGEABLE" {
-		return EligibilityResult{Eligible: false, Blocked: false, Reason: fmt.Sprintf("mergeable status is %q", pr.Mergeable)}
+		var reason string
+		switch pr.Mergeable {
+		case "UNKNOWN":
+			reason = `GitHub MergeableState is "UNKNOWN" (background job computing: https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request)`
+		case "CONFLICTING":
+			reason = `GitHub MergeableState is "CONFLICTING" (merge conflict with base branch)`
+		default:
+			reason = fmt.Sprintf("GitHub MergeableState is %q", pr.Mergeable)
+		}
+		return EligibilityResult{Eligible: false, Blocked: false, Reason: reason}
 	}
 	if len(pr.StatusCheckRollup) == 0 {
 		return EligibilityResult{Eligible: false, Blocked: false, Reason: "no status checks found"}
@@ -475,6 +505,60 @@ func filterEligible(prs []PullRequest, allowedBots []string) []PullRequest {
 		}
 	}
 	return eligible
+}
+
+const mergeableRetryMaxAttempts = 3
+
+// Why 3s retry interval:
+// GitHub background mergeability jobs typically take 2-10 seconds to finish after base branch updates.
+// 3 retries with 3s intervals keep total wait under 10s, fitting within scheduled action timeouts.
+var mergeableRetryInterval = 3 * time.Second
+
+// shouldRetryMergeable checks if a PR is an intended bot PR that failed only on mergeable status.
+// Why filter before retrying:
+// Avoid wasting sleep time on PRs from humans, drafts, or already blocked/vetoed PRs.
+func shouldRetryMergeable(pr PullRequest, allowedBots []string) bool {
+	if hasLabel(pr, vetoLabelName) || hasLabel(pr, blockedLabelName) {
+		return false
+	}
+	if !isAllowedBot(pr.Author.Login, allowedBots) {
+		return false
+	}
+	if pr.IsDraft {
+		return false
+	}
+	return true
+}
+
+// retryMergeable polls the PR mergeable status up to mergeableRetryMaxAttempts times.
+// Why retry on UNKNOWN:
+// GitHub computes PR mergeability asynchronously in background workers after PR creation
+// or pushes to the base branch. Immediate skipping would delay merging until the next schedule.
+func retryMergeable(ctx context.Context, runner CommandRunner, pr PullRequest, allowedBots []string) (PullRequest, EligibilityResult) {
+	currentPR := pr
+	var res EligibilityResult
+	for attempt := 1; attempt <= mergeableRetryMaxAttempts; attempt++ {
+		fmt.Printf("PR #%d (%s): mergeable status is \"UNKNOWN\". Retrying in %v (attempt %d/%d)...\n",
+			currentPR.Number, currentPR.Title, mergeableRetryInterval, attempt, mergeableRetryMaxAttempts)
+
+		select {
+		case <-ctx.Done():
+			return currentPR, checkEligibility(currentPR, allowedBots)
+		case <-time.After(mergeableRetryInterval):
+		}
+
+		updated, err := runner.FetchPR(ctx, currentPR.Number)
+		if err != nil {
+			fmt.Printf("Warning: failed to refetch PR #%d: %v\n", currentPR.Number, err)
+			break
+		}
+		currentPR = *updated
+		res = checkEligibility(currentPR, allowedBots)
+		if currentPR.Mergeable != "UNKNOWN" {
+			break
+		}
+	}
+	return currentPR, res
 }
 
 type VulnerabilityScanner interface {
@@ -1057,7 +1141,7 @@ func buildStepSummary(results []PRSummaryResult, meta workflowmeta.Metadata) str
 		case ActionVetoed:
 			icon = "🚫 Vetoed"
 		case ActionSkipped:
-			icon = "⏭️ Skipped"
+			icon = "⏭️ Skipped (transient)"
 		default:
 			icon = string(r.Action)
 		}
@@ -1105,6 +1189,9 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 	var eligible []PullRequest
 	for _, pr := range prs {
 		res := checkEligibility(pr, cfg.AllowedBots)
+		if !res.Eligible && pr.Mergeable == "UNKNOWN" && shouldRetryMergeable(pr, cfg.AllowedBots) {
+			pr, res = retryMergeable(ctx, runner, pr, cfg.AllowedBots)
+		}
 		if res.Eligible {
 			fmt.Printf("PR #%d (%s): eligible\n", pr.Number, pr.Title)
 			eligible = append(eligible, pr)

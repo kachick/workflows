@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/kachick/workflows/internal/workflowmeta"
@@ -342,16 +343,19 @@ func TestIsEligible(t *testing.T) {
 }
 
 type mockRunner struct {
-	prs           []PullRequest
-	diffs         map[int]string
-	fetchErr      error
-	diffErrOn     map[int]error
-	ensuredLabels []string
-	addedLabels   map[int][]string
-	mergedPRs     []int
-	mergeErrOn    map[int]error
-	comments      map[int][]string
-	commentErrOn  map[int]error
+	prs              []PullRequest
+	fetchPRResponses map[int][]*PullRequest
+	fetchPRErrOn     map[int]error
+	fetchPRCalls     map[int]int
+	diffs            map[int]string
+	fetchErr         error
+	diffErrOn        map[int]error
+	ensuredLabels    []string
+	addedLabels      map[int][]string
+	mergedPRs        []int
+	mergeErrOn       map[int]error
+	comments         map[int][]string
+	commentErrOn     map[int]error
 }
 
 func (m *mockRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest, error) {
@@ -359,6 +363,32 @@ func (m *mockRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest, error) {
 		return nil, m.fetchErr
 	}
 	return m.prs, nil
+}
+
+func (m *mockRunner) FetchPR(ctx context.Context, number int) (*PullRequest, error) {
+	if m.fetchPRCalls == nil {
+		m.fetchPRCalls = make(map[int]int)
+	}
+	m.fetchPRCalls[number]++
+
+	if err, ok := m.fetchPRErrOn[number]; ok {
+		return nil, err
+	}
+
+	if responses, ok := m.fetchPRResponses[number]; ok && len(responses) > 0 {
+		callIdx := m.fetchPRCalls[number] - 1
+		if callIdx < len(responses) {
+			return responses[callIdx], nil
+		}
+		return responses[len(responses)-1], nil
+	}
+
+	for _, pr := range m.prs {
+		if pr.Number == number {
+			return &pr, nil
+		}
+	}
+	return nil, fmt.Errorf("pr %d not found", number)
 }
 
 func (m *mockRunner) FetchPRDiff(ctx context.Context, number int) (string, error) {
@@ -1033,7 +1063,15 @@ func TestCheckEligibility(t *testing.T) {
 			modify: func(pr *PullRequest) {
 				pr.Mergeable = "CONFLICTING"
 			},
-			wantReason:  `mergeable status is "CONFLICTING"`,
+			wantReason:  `GitHub MergeableState is "CONFLICTING" (merge conflict with base branch)`,
+			wantBlocked: false,
+		},
+		{
+			name: "unknown mergeable status PR",
+			modify: func(pr *PullRequest) {
+				pr.Mergeable = "UNKNOWN"
+			},
+			wantReason:  `GitHub MergeableState is "UNKNOWN" (background job computing: https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request)`,
 			wantBlocked: false,
 		},
 		{
@@ -1667,7 +1705,7 @@ func TestBuildStepSummary(t *testing.T) {
 		if !strings.Contains(summary, "| [#3](https://github.com/kachick/workflows/pull/3) Vetoed update | @renovate[bot] | 🚫 Vetoed | suspicious code |") {
 			t.Errorf("expected vetoed row in summary, got:\n%s", summary)
 		}
-		if !strings.Contains(summary, "| [#4](https://github.com/kachick/workflows/pull/4) Pending checks | @samuebot[bot] | ⏭️ Skipped | status check pending |") {
+		if !strings.Contains(summary, "| [#4](https://github.com/kachick/workflows/pull/4) Pending checks | @samuebot[bot] | ⏭️ Skipped (transient) | status check pending |") {
 			t.Errorf("expected skipped row in summary, got:\n%s", summary)
 		}
 	})
@@ -1721,4 +1759,129 @@ func TestExecuteWritesStepSummary(t *testing.T) {
 	if !strings.Contains(string(content), "✅ Merged") {
 		t.Errorf("expected merged icon in summary, got: %s", string(content))
 	}
+}
+
+func TestShouldRetryMergeable(t *testing.T) {
+	basePR := PullRequest{
+		Number:      100,
+		Title:       "Bump test package",
+		Author:      Author{Login: "renovate[bot]"},
+		IsDraft:     false,
+		Mergeable:   "UNKNOWN",
+		Labels:      []Label{},
+		BaseRefName: "main",
+	}
+
+	if !shouldRetryMergeable(basePR, defaultAllowedBots) {
+		t.Errorf("expected shouldRetryMergeable to return true for valid bot PR")
+	}
+
+	draftPR := basePR
+	draftPR.IsDraft = true
+	if shouldRetryMergeable(draftPR, defaultAllowedBots) {
+		t.Errorf("expected shouldRetryMergeable to return false for draft PR")
+	}
+
+	humanPR := basePR
+	humanPR.Author.Login = "kachick"
+	if shouldRetryMergeable(humanPR, defaultAllowedBots) {
+		t.Errorf("expected shouldRetryMergeable to return false for human PR")
+	}
+
+	blockedPR := basePR
+	blockedPR.Labels = []Label{{Name: blockedLabelName}}
+	if shouldRetryMergeable(blockedPR, defaultAllowedBots) {
+		t.Errorf("expected shouldRetryMergeable to return false for blocked PR")
+	}
+
+	vetoedPR := basePR
+	vetoedPR.Labels = []Label{{Name: vetoLabelName}}
+	if shouldRetryMergeable(vetoedPR, defaultAllowedBots) {
+		t.Errorf("expected shouldRetryMergeable to return false for vetoed PR")
+	}
+}
+
+func TestExecuteRetriesUnknownMergeable(t *testing.T) {
+	origInterval := mergeableRetryInterval
+	mergeableRetryInterval = time.Millisecond
+	defer func() {
+		mergeableRetryInterval = origInterval
+	}()
+
+	validChecks := []StatusCheckItem{
+		{Status: "COMPLETED", Conclusion: "SUCCESS"},
+	}
+
+	t.Run("succeeds when mergeable becomes MERGEABLE on retry", func(t *testing.T) {
+		initialPR := PullRequest{
+			Number:            801,
+			Title:             "Bump foo from 1.0.0 to 1.1.0",
+			Author:            Author{Login: "dependabot[bot]"},
+			IsDraft:           false,
+			Mergeable:         "UNKNOWN",
+			StatusCheckRollup: validChecks,
+		}
+
+		resolvedPR := initialPR
+		resolvedPR.Mergeable = "MERGEABLE"
+
+		runner := &mockRunner{
+			prs: []PullRequest{initialPR},
+			fetchPRResponses: map[int][]*PullRequest{
+				801: {&resolvedPR},
+			},
+		}
+
+		cfg := &Config{
+			AllowedBots: defaultAllowedBots,
+			MergeMethod: "squash",
+		}
+		meta := workflowmeta.Metadata{ServerURL: "https://github.com", Repository: "kachick/workflows"}
+
+		if err := execute(context.Background(), cfg, runner, nil, nil, meta); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(runner.mergedPRs) != 1 || runner.mergedPRs[0] != 801 {
+			t.Errorf("expected PR 801 to be merged after retry, got %v", runner.mergedPRs)
+		}
+		if runner.fetchPRCalls[801] != 1 {
+			t.Errorf("expected 1 fetchPR call, got %d", runner.fetchPRCalls[801])
+		}
+	})
+
+	t.Run("skips when mergeable remains UNKNOWN after max retries", func(t *testing.T) {
+		initialPR := PullRequest{
+			Number:            802,
+			Title:             "Bump foo from 1.0.0 to 1.1.0",
+			Author:            Author{Login: "dependabot[bot]"},
+			IsDraft:           false,
+			Mergeable:         "UNKNOWN",
+			StatusCheckRollup: validChecks,
+		}
+
+		runner := &mockRunner{
+			prs: []PullRequest{initialPR},
+			fetchPRResponses: map[int][]*PullRequest{
+				802: {&initialPR, &initialPR, &initialPR},
+			},
+		}
+
+		cfg := &Config{
+			AllowedBots: defaultAllowedBots,
+			MergeMethod: "squash",
+		}
+		meta := workflowmeta.Metadata{ServerURL: "https://github.com", Repository: "kachick/workflows"}
+
+		if err := execute(context.Background(), cfg, runner, nil, nil, meta); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(runner.mergedPRs) != 0 {
+			t.Errorf("expected no PR to be merged, got %v", runner.mergedPRs)
+		}
+		if runner.fetchPRCalls[802] != mergeableRetryMaxAttempts {
+			t.Errorf("expected %d fetchPR calls, got %d", mergeableRetryMaxAttempts, runner.fetchPRCalls[802])
+		}
+	})
 }
