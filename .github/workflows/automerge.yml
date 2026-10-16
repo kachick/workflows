@@ -5,8 +5,8 @@ permissions:
 
 on:
   schedule:
-    # Run every 2 hours at minute 17 to avoid traffic peaks
-    - cron: '17 */2 * * *'
+    # 29 is not strict; it comes from: `gh api repos/:owner/:repo --jq '.id % 60'`
+    - cron: '29 */6 * * *'
   workflow_dispatch:
 
 jobs:

@@ -64,7 +64,7 @@ on:
   schedule:
     # Pick a distinct minute per repository to spread out API requests
     # e.g. run `gh api repos/:owner/:repo --jq '.id % 60'`
-    - cron: '17 */2 * * *'
+    - cron: '17 */6 * * *'
   workflow_dispatch:
 
 jobs:
