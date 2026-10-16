@@ -575,6 +575,8 @@ func findRepoRoot(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Use `git archive HEAD | tar -x` rather than `cp -r` or `git worktree` so untracked files
+// and `.git` metadata (hooks, config) are excluded without locking the main repository.
 func extractBaseTree(ctx context.Context, repoRoot, destDir string) error {
 	if repoRoot == "" || repoRoot == "." {
 		root, err := findRepoRoot(ctx)

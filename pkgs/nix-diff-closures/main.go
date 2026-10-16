@@ -131,11 +131,9 @@ func run() error {
 		}
 	}
 
-	// Write GitHub Actions outputs
 	writeGHAOutput("has_diff", strconv.FormatBool(rep.HasDiff))
 	writeGHAOutput("is_truncated", strconv.FormatBool(rep.IsTruncated))
 
-	// Write Step Summary if enabled
 	if stepSummaryOut && rep.HasDiff {
 		writeStepSummary(rep.CommentMarkdown)
 	}
@@ -147,7 +145,6 @@ func run() error {
 
 	fmt.Printf("Closure differences generated (truncated: %v)\n", rep.IsTruncated)
 
-	// Post comment if requested and credentials available
 	if postComment {
 		if token == "" || repo == "" || prNumber == 0 {
 			fmt.Println("Skipping GitHub comment: missing token, repo, or PR number.")
@@ -162,7 +159,6 @@ func run() error {
 
 		client := gh.NewClient(token)
 
-		// Minimize older comments
 		oldIDs, err := client.FindOutdatedComments(ctx, owner, repoName, prNumber, report.Marker)
 		if err != nil {
 			if errors.Is(err, gh.ErrPermissionDenied) {
@@ -178,7 +174,6 @@ func run() error {
 			}
 		}
 
-		// Post new comment
 		if err := client.PostComment(ctx, owner, repoName, prNumber, rep.CommentMarkdown); err != nil {
 			if errors.Is(err, gh.ErrPermissionDenied) {
 				fmt.Fprintln(os.Stderr, "::warning::GitHub token lacks permission to post PR comment. Diff was posted to Step Summary instead.")

@@ -73,12 +73,10 @@ func ParseDocumentedWorkflows(readmeContent string) (map[string]bool, error) {
 		}
 
 		if inSection {
-			// Stop scanning when the next section begins.
 			if strings.HasPrefix(line, "## ") {
 				break
 			}
 
-			// Table rows start with '|'
 			if strings.HasPrefix(line, "|") {
 				// Skip table delimiter row (e.g. "| :--- | --- |")
 				if strings.Contains(line, "---") {
@@ -86,7 +84,6 @@ func ParseDocumentedWorkflows(readmeContent string) (map[string]bool, error) {
 					continue
 				}
 
-				// Skip header row before delimiter
 				if !inTable {
 					continue
 				}

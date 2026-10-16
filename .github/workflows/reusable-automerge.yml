@@ -89,6 +89,7 @@ jobs:
             FLAKE_REF="."
           fi
 
+          # Pass GEMINI_API_KEY via env rather than --gemini-api-key to keep it out of process arguments (ps)
           nix run "${FLAKE_REF}#automerge" -- \
             --merge-method="${MERGE_METHOD}" \
             --allowed-bots="${ALLOWED_BOTS}" \

@@ -25,12 +25,12 @@ on:
         type: boolean
         default: true
       max-size:
-        description: 'Max characters before truncating comment'
+        description: 'Max bytes before truncating comment'
         required: false
         type: number
         default: 45000
       head-size:
-        description: 'Max characters preview for truncated comments'
+        description: 'Max bytes preview for truncated comments'
         required: false
         type: number
         default: 40000

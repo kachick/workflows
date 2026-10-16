@@ -51,7 +51,6 @@ func ParseTargets(input string) []string {
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		// Strip leading '.#' if user specified it
 		trimmed = strings.TrimPrefix(trimmed, ".#")
 		targets = append(targets, trimmed)
 	}

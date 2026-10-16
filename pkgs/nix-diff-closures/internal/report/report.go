@@ -12,11 +12,11 @@ import (
 // Marker is used to identify comments created by this action.
 const Marker = "<!-- nix-diff-closures-report -->"
 
-// DefaultMaxSize is the maximum character limit before falling back to artifacts.
-// GitHub comment limit is 65536 bytes. We keep a safety margin for markdown formatting.
+// DefaultMaxSize is the maximum byte limit before falling back to artifacts.
+// GitHub comments have a 65536-byte limit; keep a safety margin for markdown formatting.
 const DefaultMaxSize = 45000
 
-// DefaultHeadSize is the target size for truncated preview text.
+// DefaultHeadSize is the target byte size for truncated preview text.
 const DefaultHeadSize = 40000
 
 // TargetResult contains the diff status for a single target derivation.
@@ -97,7 +97,6 @@ func Build(results []TargetResult, maxSize int, headSize int, meta workflowmeta.
 		md.WriteString("\n")
 	}
 
-	// Format each target
 	for _, res := range results {
 		escapedTarget := html.EscapeString(res.Target)
 		if res.Error != "" {
@@ -159,7 +158,6 @@ func TruncateUTF8Safe(s string, maxBytes int) string {
 		return ""
 	}
 
-	// First pass: cut safely by valid UTF-8 runes up to maxBytes
 	byteCount := 0
 	lastRuneEnd := 0
 	lastNewlineEnd := -1

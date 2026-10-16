@@ -7,7 +7,6 @@ on:
   schedule:
     # Every 10:17(JST) on Monday
     # https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule
-    # You can see what the cron expression means at https://crontab.guru/
     - cron: '17 1 * * 1'
   workflow_dispatch:
 

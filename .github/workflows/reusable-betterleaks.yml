@@ -50,6 +50,6 @@ jobs:
           persist-credentials: false
 
       - name: Run
-        # For CI use in public repositories, ensuring full-redact does not ensure to avoid actual problems, should not forget it :)
+        # Redact matched secrets in public CI logs, though redaction does not replace revoking leaked keys
         run: |
           betterleaks git . --redact=100
