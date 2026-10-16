@@ -38,7 +38,7 @@ Preserve the following invariants when modifying or extending `automerge`:
 
 - **PR review approvals and Copilot code review**:
   - GitHub blocks an account or App from approving its own pull requests. Managing a second bot account just to click approve adds secret management toil without real security value.
-  - With GitHub Copilot code review auto-approval enabled, Copilot reviews diffs and can submit approvals that count toward required approvals in repository rulesets.
+  - With [Copilot code review auto-approval](https://github.blog/changelog/2026-09-01-copilot-code-review-can-now-approve-pull-requests/) enabled, Copilot reviews diffs and can submit approvals that count toward required approvals in repository rulesets.
   - When requiring Copilot approvals, set `required_approving_review_count` in the target repository ruleset. `automerge` needs no code changes because it relies on GitHub's native mergeable checks and `gh pr merge`.
   - Copilot reviews default to comments only. Submitting real approvals (`APPROVED` state) requires turning on "Allow Copilot to approve pull requests" in repository or organization settings.
   - Copilot approvals act as positive approvals, while `automerge` LLM reviews and OSV-Scanner act as negative veto filters. Keeping both provides defense in depth:
