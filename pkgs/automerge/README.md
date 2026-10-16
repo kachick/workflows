@@ -36,9 +36,11 @@ Preserve the following invariants when modifying or extending `automerge`:
 
 ## Implementation Limits & Operational Choices
 
-- **Why PR approvals are not used**:
-  - GitHub forbids an account or App from approving its own pull requests, and managing a second bot account just to click approve adds secret management toil without real security value.
-  - Do not require pull request review approvals for bot accounts in repository rulesets where `automerge` is used.
+- **PR review approvals and Copilot code review**:
+  - GitHub blocks an account or App from approving its own pull requests. Managing a second bot account just to click approve adds secret management toil without real security value.
+  - With GitHub Copilot code review auto-approval enabled, Copilot reviews diffs and can submit approvals that count toward required approvals in repository rulesets.
+  - When requiring Copilot approvals, set `required_approving_review_count` in the target repository ruleset. `automerge` needs no code changes because it relies on GitHub's native mergeable checks and `gh pr merge`.
+  - Copilot approvals act as positive approvals, while `automerge` LLM reviews and OSV-Scanner act as negative veto filters. Keeping both provides defense in depth against prompt injection and supply chain attacks.
 - **Why OSV-Scanner runs before LLM review**:
   - `osv-scanner` deterministically compares base and PR trees to catch newly introduced CVEs in lockfiles (`flake.lock`, `go.mod`, `Cargo.lock`, `package-lock.json`, etc.).
   - Running this check first rejects known vulnerabilities immediately without spending LLM API tokens.
