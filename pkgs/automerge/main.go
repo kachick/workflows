@@ -324,6 +324,26 @@ func checkDependabotBump(title string) (disallowed bool, reason string) {
 	return checkVersionBump(pkg, oldVer, newVer)
 }
 
+func countMarkdownTableDataRows(content string) int {
+	inTable := false
+	dataRows := 0
+	for _, rawLine := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if !strings.HasPrefix(line, "|") {
+			continue
+		}
+		if strings.Contains(line, "---") {
+			inTable = true
+			continue
+		}
+		if !inTable {
+			continue
+		}
+		dataRows++
+	}
+	return dataRows
+}
+
 // checkRenovateBump parses the Renovate PR body table to extract package version changes.
 // Renovate default PR titles omit the source version (e.g. "Update dependency foo to v1.2.3"),
 // so inspecting the PR body table is required to distinguish breaking changes from minor updates.
@@ -336,8 +356,9 @@ func checkRenovateBump(body string) (disallowed bool, reason string) {
 		}
 	}
 
+	dataRows := countMarkdownTableDataRows(content)
 	matches := renovateTableRowRegex.FindAllStringSubmatch(content, -1)
-	if len(matches) == 0 {
+	if len(matches) == 0 || len(matches) != dataRows {
 		return true, "unrecognized body format or no update rows found"
 	}
 

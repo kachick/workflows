@@ -1201,6 +1201,12 @@ func TestCheckRenovateBump(t *testing.T) {
 			wantReason: "major update (1.0.0 -> 2.0.0)",
 		},
 		{
+			name:       "group update with one unrecognized row fails closed",
+			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [foo](https://example.com) | minor | `1.0.0` -> `1.1.0` |\n| [bar](https://example.com) | replacement |Replaced by baz |\n",
+			disallowed: true,
+			wantReason: "unrecognized body format or no update rows found",
+		},
+		{
 			name:       "ignores tables in release notes section",
 			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [foo](https://example.com) | patch | `1.0.0` -> `1.0.1` |\n\n---\n\n### Release Notes\n\n<details>\n| Other | Update | Change |\n|---|---|---|\n| [broken](https://example.com) | major | `1.0.0` -> `9.0.0` |\n</details>\n",
 			disallowed: false,
