@@ -39,7 +39,8 @@ func (c *BetterleaksChecker) Check(ctx context.Context, input string) error {
 		return fmt.Errorf("%w: %s", ErrScannerNotFound, bin)
 	}
 
-	cmd := exec.CommandContext(ctx, execPath, "stdin", "--no-banner")
+	// Pass --redact=100 so out.String() never includes raw secret values in CI error logs.
+	cmd := exec.CommandContext(ctx, execPath, "stdin", "--no-banner", "--redact=100")
 	cmd.Stdin = strings.NewReader(input)
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -48,7 +49,6 @@ func (c *BetterleaksChecker) Check(ctx context.Context, input string) error {
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			// Avoid printing matching payload or raw stdout to prevent secret exposure in logs.
 			return fmt.Errorf("%w: %s", ErrLeakDetected, strings.TrimSpace(out.String()))
 		}
 		return fmt.Errorf("failed to run betterleaks: %w (%s)", err, strings.TrimSpace(out.String()))
