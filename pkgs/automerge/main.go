@@ -94,12 +94,12 @@ type StatusCheckItem struct {
 }
 
 type Config struct {
-	AllowedBots      []string
-	MergeMethod      string
-	LLMFinalVeto     bool
-	GeminiAPIKey     string
-	GeminiModel      string
-	EnableOSVScanner bool
+	AllowedBots  []string
+	MergeMethod  string
+	LLMFinalVeto bool
+	GeminiAPIKey string
+	GeminiModel  string
+	OSVScanner   bool
 }
 
 type CommandRunner interface {
@@ -217,7 +217,7 @@ func parseConfig(args []string) (*Config, error) {
 	fs.BoolVar(&cfg.LLMFinalVeto, "llm-final-veto", false, "Enable LLM final veto review before merging")
 	fs.StringVar(&cfg.GeminiAPIKey, "gemini-api-key", "", "Gemini API key for LLM final veto")
 	fs.StringVar(&cfg.GeminiModel, "gemini-model", "gemini-flash-latest", "Gemini model name for LLM final veto")
-	fs.BoolVar(&cfg.EnableOSVScanner, "enable-osv-scanner", true, "Enable OSV-Scanner diff check before merging")
+	fs.BoolVar(&cfg.OSVScanner, "osv-scanner", true, "Enable OSV-Scanner diff check before merging")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -240,9 +240,9 @@ func parseConfig(args []string) (*Config, error) {
 	if env := os.Getenv("GEMINI_MODEL"); env != "" && cfg.GeminiModel == "gemini-flash-latest" {
 		cfg.GeminiModel = env
 	}
-	if env := os.Getenv("ENABLE_OSV_SCANNER"); env != "" {
+	if env := os.Getenv("OSV_SCANNER"); env != "" {
 		if val, err := strconv.ParseBool(env); err == nil {
-			cfg.EnableOSVScanner = val
+			cfg.OSVScanner = val
 		}
 	}
 
@@ -1131,7 +1131,7 @@ func run(ctx context.Context, args []string) error {
 	runner := &DefaultCommandRunner{}
 
 	var vulnScanner VulnerabilityScanner
-	if cfg.EnableOSVScanner {
+	if cfg.OSVScanner {
 		vulnScanner = NewOSVScanner(".")
 	}
 

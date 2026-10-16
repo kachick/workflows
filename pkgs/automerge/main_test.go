@@ -1268,12 +1268,12 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 	reviewer := &mockReviewer{}
 
 	cfg := &Config{
-		AllowedBots:      defaultAllowedBots,
-		MergeMethod:      "squash",
-		LLMFinalVeto:     true,
-		GeminiAPIKey:     "dummy-key",
-		GeminiModel:      "gemini-flash-latest",
-		EnableOSVScanner: true,
+		AllowedBots:  defaultAllowedBots,
+		MergeMethod:  "squash",
+		LLMFinalVeto: true,
+		GeminiAPIKey: "dummy-key",
+		GeminiModel:  "gemini-flash-latest",
+		OSVScanner:   true,
 	}
 
 	err := execute(context.Background(), cfg, runner, reviewer, vulnScanner, workflowmeta.Metadata{})
@@ -1307,33 +1307,33 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 	}
 }
 
-func TestParseConfigEnableOSVScanner(t *testing.T) {
+func TestParseConfigOSVScanner(t *testing.T) {
 	// Default is true
 	cfg, err := parseConfig([]string{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !cfg.EnableOSVScanner {
-		t.Errorf("expected EnableOSVScanner default to be true")
+	if !cfg.OSVScanner {
+		t.Errorf("expected OSVScanner default to be true")
 	}
 
 	// CLI flag overrides to false
-	cfgDisabled, err := parseConfig([]string{"--enable-osv-scanner=false"})
+	cfgDisabled, err := parseConfig([]string{"--osv-scanner=false"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfgDisabled.EnableOSVScanner {
-		t.Errorf("expected EnableOSVScanner to be false with flag")
+	if cfgDisabled.OSVScanner {
+		t.Errorf("expected OSVScanner to be false with flag")
 	}
 
 	// Environment variable overrides
-	t.Setenv("ENABLE_OSV_SCANNER", "false")
+	t.Setenv("OSV_SCANNER", "false")
 	cfgEnv, err := parseConfig([]string{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfgEnv.EnableOSVScanner {
-		t.Errorf("expected EnableOSVScanner to be false from env")
+	if cfgEnv.OSVScanner {
+		t.Errorf("expected OSVScanner to be false from env")
 	}
 }
 
