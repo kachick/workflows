@@ -290,3 +290,95 @@ jobs:
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestCheckNixInstallerStepsDetectsCINixMismatch(t *testing.T) {
+	tempDir := t.TempDir()
+	workflowDir := filepath.Join(tempDir, ".github", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatalf("failed to create workflow dir: %v", err)
+	}
+
+	reusable := `
+jobs:
+  test:
+    steps:
+      - uses: NixOS/nix-installer-action@v1
+        with:
+          extra-conf: access-tokens = a
+`
+	ciNix := `
+jobs:
+  tasks:
+    steps:
+      - uses: NixOS/nix-installer-action@v1
+        with:
+          extra-conf: access-tokens = b
+`
+	if err := os.WriteFile(filepath.Join(workflowDir, "reusable-a.yml"), []byte(reusable), 0o600); err != nil {
+		t.Fatalf("failed to write reusable workflow: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "ci-nix.yml"), []byte(ciNix), 0o600); err != nil {
+		t.Fatalf("failed to write ci-nix.yml: %v", err)
+	}
+
+	if err := CheckNixInstallerSteps(tempDir); err == nil {
+		t.Fatal("expected error due to ci-nix.yml mismatch, got nil")
+	}
+}
+
+func TestCheckReusableJobGuardsCurrentRepository(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	if err := CheckReusableJobGuards(repoRoot); err != nil {
+		t.Fatalf("CheckReusableJobGuards(repoRoot) failed: %v", err)
+	}
+}
+
+func TestCheckReusableJobGuardsDetectsMissingFields(t *testing.T) {
+	t.Run("missing owner guard", func(t *testing.T) {
+		tempDir := t.TempDir()
+		workflowDir := filepath.Join(tempDir, ".github", "workflows")
+		if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+			t.Fatalf("failed to create workflow dir: %v", err)
+		}
+
+		content := `
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - run: echo hi
+`
+		if err := os.WriteFile(filepath.Join(workflowDir, "reusable-test.yml"), []byte(content), 0o600); err != nil {
+			t.Fatalf("failed to write workflow: %v", err)
+		}
+
+		if err := CheckReusableJobGuards(tempDir); err == nil {
+			t.Fatal("expected error when owner guard is missing, got nil")
+		}
+	})
+
+	t.Run("missing timeout-minutes", func(t *testing.T) {
+		tempDir := t.TempDir()
+		workflowDir := filepath.Join(tempDir, ".github", "workflows")
+		if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+			t.Fatalf("failed to create workflow dir: %v", err)
+		}
+
+		content := `
+jobs:
+  build:
+    if: github.repository_owner == 'kachick'
+    runs-on: ubuntu-26.04
+    steps:
+      - run: echo hi
+`
+		if err := os.WriteFile(filepath.Join(workflowDir, "reusable-test.yml"), []byte(content), 0o600); err != nil {
+			t.Fatalf("failed to write workflow: %v", err)
+		}
+
+		if err := CheckReusableJobGuards(tempDir); err == nil {
+			t.Fatal("expected error when timeout-minutes is missing, got nil")
+		}
+	})
+}

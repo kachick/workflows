@@ -259,13 +259,18 @@ func ExtractNixInstallerStep(workflowContent string) (string, bool) {
 	return "", false
 }
 
-// CheckNixInstallerSteps verifies that all reusable workflows using NixOS/nix-installer-action
+// CheckNixInstallerSteps verifies that all workflows using NixOS/nix-installer-action
 // share the identical step definition (version, inputs, extra-conf, etc.).
 func CheckNixInstallerSteps(repoRoot string) error {
 	workflowDir := filepath.Join(repoRoot, ".github", "workflows")
 	files, err := FindReusableWorkflowFiles(workflowDir)
 	if err != nil {
 		return err
+	}
+
+	ciNixPath := filepath.Join(workflowDir, "ci-nix.yml")
+	if _, err := os.Stat(ciNixPath); err == nil {
+		files = append(files, "ci-nix.yml")
 	}
 
 	type stepRecord struct {
@@ -300,6 +305,117 @@ func CheckNixInstallerSteps(repoRoot string) error {
 				base.filename, current.filename,
 				base.filename, base.step,
 				current.filename, current.step)
+		}
+	}
+
+	return nil
+}
+
+type jobGuardRecord struct {
+	name       string
+	hasOwnerIf bool
+	hasTimeout bool
+}
+
+func parseReusableJobGuards(workflowContent string) []jobGuardRecord {
+	scanner := bufio.NewScanner(strings.NewReader(workflowContent))
+	inJobs := false
+	jobIndent := -1
+	propIndent := -1
+	var jobs []jobGuardRecord
+	var current *jobGuardRecord
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent == 0 {
+			if strings.HasPrefix(trimmed, "jobs:") {
+				inJobs = true
+				continue
+			}
+			if inJobs {
+				break
+			}
+			continue
+		}
+
+		if !inJobs {
+			continue
+		}
+
+		if jobIndent < 0 {
+			jobIndent = indent
+		}
+
+		if indent == jobIndent && strings.HasSuffix(trimmed, ":") {
+			if current != nil {
+				jobs = append(jobs, *current)
+			}
+			current = &jobGuardRecord{
+				name: strings.TrimSuffix(trimmed, ":"),
+			}
+			propIndent = -1
+			continue
+		}
+
+		if current == nil || indent <= jobIndent {
+			continue
+		}
+
+		if propIndent < 0 {
+			propIndent = indent
+		}
+
+		if indent == propIndent {
+			if strings.HasPrefix(trimmed, "if:") && strings.Contains(trimmed, "github.repository_owner == 'kachick'") {
+				current.hasOwnerIf = true
+			}
+			if strings.HasPrefix(trimmed, "timeout-minutes:") {
+				current.hasTimeout = true
+			}
+		}
+	}
+
+	if current != nil {
+		jobs = append(jobs, *current)
+	}
+
+	return jobs
+}
+
+// CheckReusableJobGuards verifies that every job in reusable-*.yml defines both
+// `if: github.repository_owner == 'kachick'` and `timeout-minutes`.
+func CheckReusableJobGuards(repoRoot string) error {
+	workflowDir := filepath.Join(repoRoot, ".github", "workflows")
+	files, err := FindReusableWorkflowFiles(workflowDir)
+	if err != nil {
+		return err
+	}
+
+	for _, file := range files {
+		path := filepath.Join(workflowDir, file)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", file, err)
+		}
+
+		jobs := parseReusableJobGuards(string(content))
+		if len(jobs) == 0 {
+			return fmt.Errorf("%s: no jobs found", file)
+		}
+
+		for _, job := range jobs {
+			if !job.hasOwnerIf {
+				return fmt.Errorf("%s: job %q is missing `if: github.repository_owner == 'kachick'` guard", file, job.name)
+			}
+			if !job.hasTimeout {
+				return fmt.Errorf("%s: job %q is missing `timeout-minutes`", file, job.name)
+			}
 		}
 	}
 
