@@ -43,7 +43,25 @@
 - Prefer bashless implementations. External scripts cannot use GitHub Actions template syntax (`${{ ... }}`), and passing values through environment variables or CLI flags avoids script injection risks.
 - Keep any remaining bash scripts outside workflow YAML files so `shellcheck` and `dprint` can format and lint them.
 - Reusable workflows run in the caller repository context, so local scripts cannot be called directly. Keep tools inside Nix packages and run them via `nix run` so external repositories can fetch them.
-- Any language is acceptable if bashless requirements are met. Go is currently chosen to reduce context switching and setup time, and because `go run` is fast and available on standard runners.
+
+### Why Nix: Supply chain security and revision matching
+
+- **Reduce supply chain risks for external tools**:
+  - Most logic is built directly in Go, but some external tools like `betterleaks` and `osv-scanner` are still necessary.
+  - Instead of trusting upstream GitHub release binaries, using packages built by Hydra through nixpkgs reduces supply chain risks in deployment workflows.
+  - This provides an established platform alternative to the current trend of requiring build attestations for each separate tool.
+  - However, this approach does not stop all risks. For example, the recent malicious commit to Zod happened directly on the source repository rather than in the package release pipeline.
+- **Frictionless revision deployment**:
+  - Pre-built CLI binaries work well when tool APIs are stable (like the `gh` command).
+  - For reusable workflows under active change, preparing and guaranteeing the exact CLI binary matching the referenced workflow revision (such as `@main` or commit SHA) is difficult.
+  - Running tools directly from Flake revisions (`nix run github:kachick/workflows/<rev>#<target>`) solves this without friction, removing the need for manual GitHub releases and asset management.
+
+### Why Go: Rich standard library and zero vendorHash toil
+
+- Any language that meets the bashless requirements is acceptable, but Go is chosen for several key advantages:
+  - **Self-contained standard library**: While Rust is often the first choice for modern CLI tools, Go provides a strong standard library. Most workflow logic can be implemented without third-party dependencies.
+  - **Zero vendorHash maintenance toil**: In fact, `go.mod` in this repository remains empty. This avoids a major pain point of Nix + Go: updating `vendorHash` every time dependencies change. With zero external packages, package definitions keep `vendorHash = null`, removing maintenance toil and keeping Nix builds simple.
+  - **Low context switching and fast runs**: Go reduces setup time, and `go test` and `go run` execute fast on standard runners without extra toolchains.
 
 ### Do not add dry-run mode to workflows
 
