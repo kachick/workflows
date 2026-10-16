@@ -492,8 +492,10 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 		repoDir = root
 	}
 
+	configFile := resolveOSVConfig(repoDir)
+
 	if !s.baseScanned {
-		ids, err := scanDirectory(ctx, repoDir)
+		ids, err := scanDirectory(ctx, repoDir, configFile)
 		if err != nil {
 			return false, "", fmt.Errorf("osv-scanner failed on base repository: %w", err)
 		}
@@ -515,7 +517,9 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 		return false, "", fmt.Errorf("failed to apply PR diff: %w", err)
 	}
 
-	prIDs, err := scanDirectory(ctx, tmpDir)
+	// Pass configFile from the base repository rather than resolving inside tmpDir,
+	// so a pull request cannot silence its own vulnerabilities by editing osv-scanner.toml.
+	prIDs, err := scanDirectory(ctx, tmpDir, configFile)
 	if err != nil {
 		return false, "", fmt.Errorf("osv-scanner failed on patched PR tree: %w", err)
 	}
@@ -604,14 +608,28 @@ func applyPatch(ctx context.Context, targetDir, diff string) error {
 	return nil
 }
 
-func scanDirectory(ctx context.Context, dir string) ([]string, error) {
-	args := []string{"scan", "source", "-r", dir, "--format=json", "--no-call-analysis=go"}
-	configFile := filepath.Join(dir, "osv-scanner.toml")
-	if _, err := os.Stat(configFile); err == nil {
-		args = append(args, "--config="+configFile)
-	} else if _, err := os.Stat("osv-scanner.toml"); err == nil {
-		args = append(args, "--config=osv-scanner.toml")
+func resolveOSVConfig(trustedBaseDir string) string {
+	candidate := filepath.Join(trustedBaseDir, "osv-scanner.toml")
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
 	}
+	return ""
+}
+
+func buildOSVScannerArgs(dir, configFile string) []string {
+	args := []string{"scan", "source", "-r", dir, "--format=json", "--no-call-analysis=go"}
+	if configFile != "" {
+		args = append(args, "--config="+configFile)
+	} else {
+		// Force an empty config when the base branch has no osv-scanner.toml,
+		// preventing osv-scanner from auto-discovering an untrusted osv-scanner.toml added in dir.
+		args = append(args, "--config="+os.DevNull)
+	}
+	return args
+}
+
+func scanDirectory(ctx context.Context, dir, configFile string) ([]string, error) {
+	args := buildOSVScannerArgs(dir, configFile)
 
 	cmd := exec.CommandContext(ctx, "osv-scanner", args...)
 	var stdout, stderr bytes.Buffer

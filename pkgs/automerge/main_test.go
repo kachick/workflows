@@ -1230,6 +1230,45 @@ func TestExtractBaseTreeAndApplyPatch(t *testing.T) {
 	}
 }
 
+func TestResolveOSVConfigIgnoresPatchedTree(t *testing.T) {
+	baseDir := t.TempDir()
+	patchedDir := t.TempDir()
+
+	// Untrusted PR adds osv-scanner.toml in patchedDir, while baseDir has none.
+	untrustedConfig := filepath.Join(patchedDir, "osv-scanner.toml")
+	if err := os.WriteFile(untrustedConfig, []byte("[[IgnoredVulns]]\nid = \"GHSA-0000-0000-0000\"\n"), 0o600); err != nil {
+		t.Fatalf("failed to write untrusted config: %v", err)
+	}
+
+	resolved := resolveOSVConfig(baseDir)
+	if resolved != "" {
+		t.Fatalf("expected empty config when baseDir has no osv-scanner.toml, got %q", resolved)
+	}
+
+	argsWithoutBaseConfig := buildOSVScannerArgs(patchedDir, resolved)
+	if !slices.Contains(argsWithoutBaseConfig, "--config="+os.DevNull) {
+		t.Errorf("expected --config=%s when baseDir has no config, got %v", os.DevNull, argsWithoutBaseConfig)
+	}
+	if slices.Contains(argsWithoutBaseConfig, "--config="+untrustedConfig) {
+		t.Errorf("must not use untrusted config from patchedDir: %v", argsWithoutBaseConfig)
+	}
+
+	// When baseDir has osv-scanner.toml, scanning patchedDir must still pass baseDir's config.
+	trustedConfig := filepath.Join(baseDir, "osv-scanner.toml")
+	if err := os.WriteFile(trustedConfig, []byte("# trusted\n"), 0o600); err != nil {
+		t.Fatalf("failed to write trusted config: %v", err)
+	}
+	resolvedTrusted := resolveOSVConfig(baseDir)
+	if resolvedTrusted != trustedConfig {
+		t.Fatalf("expected %q, got %q", trustedConfig, resolvedTrusted)
+	}
+
+	argsWithBaseConfig := buildOSVScannerArgs(patchedDir, resolvedTrusted)
+	if !slices.Contains(argsWithBaseConfig, "--config="+trustedConfig) {
+		t.Errorf("expected --config=%s when scanning patchedDir, got %v", trustedConfig, argsWithBaseConfig)
+	}
+}
+
 func TestExecuteVulnerabilityScan(t *testing.T) {
 	validChecks := []StatusCheckItem{
 		{Status: "COMPLETED", Conclusion: "SUCCESS"},
