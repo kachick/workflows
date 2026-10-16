@@ -30,6 +30,12 @@
 - Other actions used today are transitional. See https://github.com/kachick/anylang-template/issues/323 for details.
 - Actions are currently pinned to commit SHAs. Plan to introduce https://github.com/github/gh-actions-lock in the future.
 
+### Minimal tooling
+
+- Keep external tool dependencies minimal to reduce supply chain risks.
+- Add tools only when they are standard in nixpkgs `stdenv` or common `buildInputs`.
+- For example, many third-party tools can diff Nix stores, but this repository only uses the official `nix store diff-closures`.
+
 ## Architecture & Implementation Choices
 
 ### Bashless CLI tools via `nix run`
@@ -38,11 +44,6 @@
 - Keep any remaining bash scripts outside workflow YAML files so `shellcheck` and `dprint` can format and lint them.
 - Reusable workflows run in the caller repository context, so local scripts cannot be called directly. Keep tools inside Nix packages and run them via `nix run` so external repositories can fetch them.
 - Any language is acceptable if bashless requirements are met. Go is currently chosen to reduce context switching and setup time, and because `go run` is fast and available on standard runners.
-
-### Minimal tooling in nixpkgs
-
-- Add tools only when they are common in nixpkgs `stdenv` or `updateScript`.
-- For example, many tools can diff Nix stores, but this repository only uses the official `nix store diff-closures`.
 
 ### Do not add dry-run mode to workflows
 
