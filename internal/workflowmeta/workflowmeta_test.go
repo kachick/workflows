@@ -74,7 +74,7 @@ func TestMetadataProvenanceText(t *testing.T) {
 			WorkflowFilePath:   ".github/workflows/reusable-automerge.yml",
 		}
 
-		expected := "Merged automatically by [workflow run](https://github.com/kachick/workflows/actions/runs/12345678) (defined at [kachick/workflows@abcdef1](https://github.com/kachick/workflows/blob/abcdef123456/.github/workflows/reusable-automerge.yml))."
+		expected := "Merged automatically by [actions/runs/12345678](https://github.com/kachick/workflows/actions/runs/12345678) (defined at [kachick/workflows@abcdef1](https://github.com/kachick/workflows/blob/abcdef123456/.github/workflows/reusable-automerge.yml))."
 		got := meta.ProvenanceText("Merged automatically")
 		if got != expected {
 			t.Errorf("got %q, want %q", got, expected)

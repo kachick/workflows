@@ -65,7 +65,7 @@ func TestBuildReport(t *testing.T) {
 		WorkflowSHA:        "c4c03dd9c5377b99ca53183897baaf53114b86db",
 		WorkflowFilePath:   ".github/workflows/reusable-nix-diff-closures.yml",
 	}
-	expectedProvenance := "This report was generated automatically by [workflow run](https://github.com/kachick/workflows/actions/runs/12345678) (defined at [kachick/workflows@c4c03dd](https://github.com/kachick/workflows/blob/c4c03dd9c5377b99ca53183897baaf53114b86db/.github/workflows/reusable-nix-diff-closures.yml))."
+	expectedProvenance := "This report was generated automatically by [actions/runs/12345678](https://github.com/kachick/workflows/actions/runs/12345678) (defined at [kachick/workflows@c4c03dd](https://github.com/kachick/workflows/blob/c4c03dd9c5377b99ca53183897baaf53114b86db/.github/workflows/reusable-nix-diff-closures.yml))."
 
 	t.Run("no diff across targets", func(t *testing.T) {
 		results := []TargetResult{

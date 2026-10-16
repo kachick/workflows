@@ -81,8 +81,8 @@ func (m Metadata) ShortWorkflowSHA() string {
 // If metadata is incomplete, it returns a plain sentence without links.
 func (m Metadata) ProvenanceText(action string) string {
 	if m.IsComplete() {
-		return fmt.Sprintf("%s by [workflow run](%s) (defined at [%s@%s](%s)).",
-			action, m.RunURL(), m.WorkflowRepository, m.ShortWorkflowSHA(), m.WorkflowPermalink())
+		return fmt.Sprintf("%s by [actions/runs/%s](%s) (defined at [%s@%s](%s)).",
+			action, m.RunID, m.RunURL(), m.WorkflowRepository, m.ShortWorkflowSHA(), m.WorkflowPermalink())
 	}
 	return fmt.Sprintf("%s.", action)
 }

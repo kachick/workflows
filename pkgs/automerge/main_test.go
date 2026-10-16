@@ -1629,7 +1629,7 @@ func TestExecuteLabelsBlockedPR(t *testing.T) {
 	if !strings.Contains(runner.comments[601][0], blockedLabelName) {
 		t.Errorf("expected comment on 601 to mention %q, got %q", blockedLabelName, runner.comments[601][0])
 	}
-	if !strings.Contains(runner.comments[601][0], "Inspected by [workflow run]") {
+	if !strings.Contains(runner.comments[601][0], "Inspected by [actions/runs/99999]") {
 		t.Errorf("expected comment on 601 to include provenance link, got %q", runner.comments[601][0])
 	}
 
