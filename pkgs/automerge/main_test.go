@@ -1920,6 +1920,7 @@ func TestExecuteRetriesUnknownMergeable(t *testing.T) {
 	})
 }
 
+// Keep the test name matching the -skip pattern in package.nix when renaming.
 func TestReasonDocsExist(t *testing.T) {
 	docs := []string{
 		docReasonUnknownMergeable,

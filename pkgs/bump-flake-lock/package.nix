@@ -16,7 +16,7 @@ buildGo127Module (finalAttrs: {
     fileset = lib.fileset.unions [
       ../../go.mod
       ../../internal
-      (lib.fileset.fileFilter (file: file.name != "README.md") ./.)
+      (lib.fileset.fileFilter (file: !file.hasExt "md") ./.)
     ];
   };
 
