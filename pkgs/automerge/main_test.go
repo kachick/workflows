@@ -1920,8 +1920,11 @@ func TestExecuteRetriesUnknownMergeable(t *testing.T) {
 	})
 }
 
-// Keep the test name matching the -skip pattern in package.nix when renaming.
 func TestReasonDocsExist(t *testing.T) {
+	if os.Getenv("MINIMIZED_ASSETS") != "" {
+		t.Skip("skipping doc existence test because non-Go assets are excluded from fileset")
+	}
+
 	docs := []string{
 		docReasonUnknownMergeable,
 		docReasonConflicting,

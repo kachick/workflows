@@ -22,10 +22,6 @@ buildGo127Module (finalAttrs: {
     ];
   };
 
-  checkFlags = [
-    "-skip=^TestReasonDocs"
-  ];
-
   vendorHash = null;
 
   subPackages = [ "pkgs/automerge" ];
@@ -42,7 +38,11 @@ buildGo127Module (finalAttrs: {
     }
   '';
 
-  env.CGO_ENABLED = "0";
+  env = {
+    CGO_ENABLED = "0";
+    # Signals tests that non-Go assets like markdown docs are excluded from the source fileset
+    MINIMIZED_ASSETS = "1";
+  };
 
   passthru.shared-gomod = true;
 
