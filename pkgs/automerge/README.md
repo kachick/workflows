@@ -40,7 +40,10 @@ Preserve the following invariants when modifying or extending `automerge`:
   - GitHub blocks an account or App from approving its own pull requests. Managing a second bot account just to click approve adds secret management toil without real security value.
   - With GitHub Copilot code review auto-approval enabled, Copilot reviews diffs and can submit approvals that count toward required approvals in repository rulesets.
   - When requiring Copilot approvals, set `required_approving_review_count` in the target repository ruleset. `automerge` needs no code changes because it relies on GitHub's native mergeable checks and `gh pr merge`.
-  - Copilot approvals act as positive approvals, while `automerge` LLM reviews and OSV-Scanner act as negative veto filters. Keeping both provides defense in depth against prompt injection and supply chain attacks.
+  - Copilot reviews default to comments only. Submitting real approvals (`APPROVED` state) requires turning on "Allow Copilot to approve pull requests" in repository or organization settings.
+  - Copilot approvals act as positive approvals, while `automerge` LLM reviews and OSV-Scanner act as negative veto filters. Keeping both provides defense in depth:
+    - In a real test ([`kachick/infra-test#1`](https://github.com/kachick/infra-test/pull/1#pullrequestreview-5548352008)), a pull request titled "Add Copyleft license" added an MIT license instead. Copilot noted the difference in its summary table but still recommended approval without flagging a problem.
+    - Relying only on positive approvals allows subtle mismatches or prompt injections to pass through. Keeping negative veto filters (`automerge:vetoed`) remains essential.
 - **Why OSV-Scanner runs before LLM review**:
   - `osv-scanner` deterministically compares base and PR trees to catch newly introduced CVEs in lockfiles (`flake.lock`, `go.mod`, `Cargo.lock`, `package-lock.json`, etc.).
   - Running this check first rejects known vulnerabilities immediately without spending LLM API tokens.

@@ -7,6 +7,7 @@
 - Prioritize security above all else. The goal is keeping repositories safe, not keeping CI badges green.
 - Merging an uncertain or suspicious change is the worst possible result.
 - When facing an unknown or unexpected pattern (such as unrecognized pull request titles or ambiguous checks), true fail-safe behavior is to stop: exit with an error, or skip merging and print a log instead of guessing.
+- Positive approvals (such as GitHub Copilot code review recommendations) can miss subtle mismatches between pull request titles and diffs. For example, in [`kachick/infra-test#1`](https://github.com/kachick/infra-test/pull/1#pullrequestreview-5548352008), Copilot recommended approval for a pull request adding an MIT license despite a title claiming a copyleft license. Negative veto filters (`automerge:vetoed`) remain essential for defense in depth.
 
 ### Minimize token scope over immediacy
 
