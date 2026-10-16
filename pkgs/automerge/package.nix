@@ -38,11 +38,12 @@ buildGo127Module (finalAttrs: {
     }
   '';
 
-  env = {
-    CGO_ENABLED = "0";
-    # Signals tests that non-Go assets like markdown docs are excluded from the source fileset
-    MINIMIZED_ASSETS = "1";
-  };
+  # Signals tests that non-Go assets like markdown docs are excluded from the source fileset
+  preCheck = ''
+    export MINIMIZED_ASSETS=1
+  '';
+
+  env.CGO_ENABLED = "0";
 
   passthru.shared-gomod = true;
 
