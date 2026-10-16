@@ -1017,7 +1017,8 @@ func TestCheckEligibility(t *testing.T) {
 		StatusCheckRollup: validChecks,
 	}
 
-	res := checkEligibility(basePR, defaultAllowedBots)
+	meta := workflowmeta.Metadata{}
+	res := checkEligibility(basePR, defaultAllowedBots, meta)
 	if !res.Eligible || res.Reason != "eligible for merge" {
 		t.Fatalf("expected eligible for merge, got eligible=%v, reason=%q", res.Eligible, res.Reason)
 	}
@@ -1025,14 +1026,14 @@ func TestCheckEligibility(t *testing.T) {
 	dependabot0xPR := basePR
 	dependabot0xPR.Author.Login = "dependabot[bot]"
 	dependabot0xPR.Title = "Bump golang.org/x/sys from 0.48.0 to 0.49.0"
-	if res := checkEligibility(dependabot0xPR, defaultAllowedBots); !res.Eligible {
+	if res := checkEligibility(dependabot0xPR, defaultAllowedBots, meta); !res.Eligible {
 		t.Fatalf("expected dependabot 0.x bump to be eligible, got reason=%q", res.Reason)
 	}
 
 	renovate0xPR := basePR
 	renovate0xPR.Author.Login = "renovate[bot]"
 	renovate0xPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [dprint/dprint-plugin-markdown](https://example.com) | minor | `0.24.0` → `0.26.0` |\n"
-	if res := checkEligibility(renovate0xPR, defaultAllowedBots); !res.Eligible {
+	if res := checkEligibility(renovate0xPR, defaultAllowedBots, meta); !res.Eligible {
 		t.Fatalf("expected renovate 0.x bump to be eligible, got reason=%q", res.Reason)
 	}
 
@@ -1063,7 +1064,7 @@ func TestCheckEligibility(t *testing.T) {
 			modify: func(pr *PullRequest) {
 				pr.Mergeable = "CONFLICTING"
 			},
-			wantReason:  `GitHub MergeableState is "CONFLICTING" (merge conflict with base branch)`,
+			wantReason:  `GitHub MergeableState is "CONFLICTING" (details: https://github.com/kachick/workflows/blob/main/pkgs/automerge/docs/reasons/conflicting.md)`,
 			wantBlocked: false,
 		},
 		{
@@ -1071,7 +1072,7 @@ func TestCheckEligibility(t *testing.T) {
 			modify: func(pr *PullRequest) {
 				pr.Mergeable = "UNKNOWN"
 			},
-			wantReason:  `GitHub MergeableState is "UNKNOWN" (background job computing: https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request)`,
+			wantReason:  `GitHub MergeableState is "UNKNOWN" (details: https://github.com/kachick/workflows/blob/main/pkgs/automerge/docs/reasons/unknown-mergeable.md)`,
 			wantBlocked: false,
 		},
 		{
@@ -1151,7 +1152,7 @@ func TestCheckEligibility(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pr := basePR
 			tc.modify(&pr)
-			res := checkEligibility(pr, defaultAllowedBots)
+			res := checkEligibility(pr, defaultAllowedBots, meta)
 			if res.Eligible {
 				t.Fatalf("expected PR to be ineligible")
 			}
@@ -1884,4 +1885,25 @@ func TestExecuteRetriesUnknownMergeable(t *testing.T) {
 			t.Errorf("expected %d fetchPR calls, got %d", mergeableRetryMaxAttempts, runner.fetchPRCalls[802])
 		}
 	})
+}
+
+func TestReasonDocsExist(t *testing.T) {
+	docs := []string{
+		docReasonUnknownMergeable,
+		docReasonConflicting,
+	}
+
+	repoRoot := filepath.Join("..", "..")
+
+	for _, doc := range docs {
+		fullPath := filepath.Join(repoRoot, filepath.FromSlash(doc))
+		info, err := os.Stat(fullPath)
+		if err != nil {
+			t.Errorf("reason doc %q does not exist: %v", doc, err)
+			continue
+		}
+		if info.Size() == 0 {
+			t.Errorf("reason doc %q is empty", doc)
+		}
+	}
 }

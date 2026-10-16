@@ -51,6 +51,24 @@ func (m Metadata) WorkflowPermalink() string {
 	return fmt.Sprintf("%s/%s/blob/%s/%s", m.ServerURL, m.WorkflowRepository, m.WorkflowSHA, m.WorkflowFilePath)
 }
 
+// BlobPermalink returns a GitHub permalink to the specified repository-relative file path.
+// When workflow metadata is incomplete (such as in local runs), it falls back to the default repo and main branch.
+func (m Metadata) BlobPermalink(relativePath string) string {
+	serverURL := m.ServerURL
+	if serverURL == "" {
+		serverURL = "https://github.com"
+	}
+	repo := m.WorkflowRepository
+	if repo == "" {
+		repo = "kachick/workflows"
+	}
+	rev := m.WorkflowSHA
+	if rev == "" {
+		rev = "main"
+	}
+	return fmt.Sprintf("%s/%s/blob/%s/%s", serverURL, repo, rev, relativePath)
+}
+
 // ProvenanceText formats a Markdown sentence with run and definition links if metadata is complete.
 // If metadata is incomplete, it returns a plain sentence without links.
 func (m Metadata) ProvenanceText(action string) string {

@@ -45,6 +45,9 @@ const (
 	blockedLabelName        = "automerge:blocked"
 	blockedLabelDescription = "Blocked by automerge workflow (requires manual review)"
 	blockedLabelColor       = "fbca04"
+
+	docReasonUnknownMergeable = "pkgs/automerge/docs/reasons/unknown-mergeable.md"
+	docReasonConflicting      = "pkgs/automerge/docs/reasons/conflicting.md"
 )
 
 type PRAction string
@@ -440,7 +443,7 @@ func hasLabel(pr PullRequest, name string) bool {
 	return false
 }
 
-func checkEligibility(pr PullRequest, allowedBots []string) EligibilityResult {
+func checkEligibility(pr PullRequest, allowedBots []string, meta workflowmeta.Metadata) EligibilityResult {
 	if hasLabel(pr, vetoLabelName) {
 		return EligibilityResult{Eligible: false, Blocked: false, Reason: fmt.Sprintf("PR has %q label", vetoLabelName)}
 	}
@@ -457,9 +460,9 @@ func checkEligibility(pr PullRequest, allowedBots []string) EligibilityResult {
 		var reason string
 		switch pr.Mergeable {
 		case "UNKNOWN":
-			reason = `GitHub MergeableState is "UNKNOWN" (background job computing: https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request)`
+			reason = fmt.Sprintf("GitHub MergeableState is \"UNKNOWN\" (details: %s)", meta.BlobPermalink(docReasonUnknownMergeable))
 		case "CONFLICTING":
-			reason = `GitHub MergeableState is "CONFLICTING" (merge conflict with base branch)`
+			reason = fmt.Sprintf("GitHub MergeableState is \"CONFLICTING\" (details: %s)", meta.BlobPermalink(docReasonConflicting))
 		default:
 			reason = fmt.Sprintf("GitHub MergeableState is %q", pr.Mergeable)
 		}
@@ -494,7 +497,7 @@ func checkEligibility(pr PullRequest, allowedBots []string) EligibilityResult {
 }
 
 func isEligible(pr PullRequest, allowedBots []string) bool {
-	return checkEligibility(pr, allowedBots).Eligible
+	return checkEligibility(pr, allowedBots, workflowmeta.Metadata{}).Eligible
 }
 
 func filterEligible(prs []PullRequest, allowedBots []string) []PullRequest {
@@ -534,7 +537,7 @@ func shouldRetryMergeable(pr PullRequest, allowedBots []string) bool {
 // Why retry on UNKNOWN:
 // GitHub computes PR mergeability asynchronously in background workers after PR creation
 // or pushes to the base branch. Immediate skipping would delay merging until the next schedule.
-func retryMergeable(ctx context.Context, runner CommandRunner, pr PullRequest, allowedBots []string) (PullRequest, EligibilityResult) {
+func retryMergeable(ctx context.Context, runner CommandRunner, pr PullRequest, allowedBots []string, meta workflowmeta.Metadata) (PullRequest, EligibilityResult) {
 	currentPR := pr
 	var res EligibilityResult
 	for attempt := 1; attempt <= mergeableRetryMaxAttempts; attempt++ {
@@ -543,7 +546,7 @@ func retryMergeable(ctx context.Context, runner CommandRunner, pr PullRequest, a
 
 		select {
 		case <-ctx.Done():
-			return currentPR, checkEligibility(currentPR, allowedBots)
+			return currentPR, checkEligibility(currentPR, allowedBots, meta)
 		case <-time.After(mergeableRetryInterval):
 		}
 
@@ -553,7 +556,7 @@ func retryMergeable(ctx context.Context, runner CommandRunner, pr PullRequest, a
 			break
 		}
 		currentPR = *updated
-		res = checkEligibility(currentPR, allowedBots)
+		res = checkEligibility(currentPR, allowedBots, meta)
 		if currentPR.Mergeable != "UNKNOWN" {
 			break
 		}
@@ -1188,9 +1191,9 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 
 	var eligible []PullRequest
 	for _, pr := range prs {
-		res := checkEligibility(pr, cfg.AllowedBots)
+		res := checkEligibility(pr, cfg.AllowedBots, meta)
 		if !res.Eligible && pr.Mergeable == "UNKNOWN" && shouldRetryMergeable(pr, cfg.AllowedBots) {
-			pr, res = retryMergeable(ctx, runner, pr, cfg.AllowedBots)
+			pr, res = retryMergeable(ctx, runner, pr, cfg.AllowedBots, meta)
 		}
 		if res.Eligible {
 			fmt.Printf("PR #%d (%s): eligible\n", pr.Number, pr.Title)

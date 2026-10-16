@@ -72,6 +72,32 @@ func TestMetadataProvenanceText(t *testing.T) {
 	})
 }
 
+func TestMetadataBlobPermalink(t *testing.T) {
+	t.Run("complete metadata generates exact commit permalink", func(t *testing.T) {
+		meta := Metadata{
+			ServerURL:          "https://github.com",
+			WorkflowRepository: "kachick/workflows",
+			WorkflowSHA:        "abcdef123456",
+		}
+
+		expected := "https://github.com/kachick/workflows/blob/abcdef123456/pkgs/automerge/docs/reasons/unknown-mergeable.md"
+		got := meta.BlobPermalink("pkgs/automerge/docs/reasons/unknown-mergeable.md")
+		if got != expected {
+			t.Errorf("got %q, want %q", got, expected)
+		}
+	})
+
+	t.Run("incomplete metadata falls back to default repo and main branch", func(t *testing.T) {
+		meta := Metadata{}
+
+		expected := "https://github.com/kachick/workflows/blob/main/pkgs/automerge/docs/reasons/unknown-mergeable.md"
+		got := meta.BlobPermalink("pkgs/automerge/docs/reasons/unknown-mergeable.md")
+		if got != expected {
+			t.Errorf("got %q, want %q", got, expected)
+		}
+	})
+}
+
 func TestGet(t *testing.T) {
 	t.Setenv("GITHUB_SERVER_URL", "https://custom.github.com")
 	t.Setenv("GITHUB_REPOSITORY", "kachick/workflows")
