@@ -61,8 +61,8 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ steps.publish-token.outputs.token }}
-          # This workflow depends on stored credentials for the subsequent git push command
-          persist-credentials: true
+          # Avoid storing the GitHub App token in .git/config before post-commit-lock-file runs
+          persist-credentials: false
 
       - uses: NixOS/nix-installer-action@62c1943b776c509394b550f3f983adc14e9212d6 # v1.0.0
         with:

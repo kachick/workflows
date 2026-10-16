@@ -231,6 +231,11 @@ func execute(ctx context.Context, cfg *Config) error {
 	}
 
 	fmt.Printf("Found %d commit(s).\n", count)
+	// Configure git credentials only after post-command and leak checks finish,
+	// so untrusted code in post-command cannot read tokens from .git/config.
+	if err := runCmd(ctx, env, "gh", "auth", "setup-git"); err != nil {
+		return fmt.Errorf("failed to configure git authentication: %w", err)
+	}
 	fmt.Printf("Pushing to %s...\n", cfg.BranchName)
 	if err := runCmd(ctx, env, "git", "push", "origin", cfg.BranchName, "--force"); err != nil {
 		return fmt.Errorf("failed to push to %s: %w", cfg.BranchName, err)
