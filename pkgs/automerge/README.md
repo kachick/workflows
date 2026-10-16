@@ -18,7 +18,7 @@ Preserve the following invariants when modifying or extending `automerge`:
 1. **Negative Veto Only (Never Positive Allow)**:
    - Vulnerability scans and LLM review act strictly as **negative veto filters** _after_ all deterministic checks pass (allowed bot author, non-draft status, `MERGEABLE` state, completed green CI checks, and allowed version bump).
    - Never invert this flow to a positive "allow" model (such as merging because an LLM approved a diff, or letting an LLM bypass failing CI or major version blocks). In a positive allow model, prompt injection or model hallucinations directly cause unauthorized merges.
-   - Gemini only reports risk severity; Go code makes the final veto decision.
+   - Keep the LLM strictly as a stateless risk analyzer: do not tell the model its pipeline role (such as "you are the final check" or "CI already passed"), and do not ask it whether to merge. How the model reacts to role pressure or prior green checks is unpredictable; Go code controls the workflow and makes the final veto decision from the reported severity.
 
 2. **Negative State Only (`automerge:vetoed`, `automerge:blocked`)**:
    - Pull request labels are used strictly as negative filters to stop automatic merging.
