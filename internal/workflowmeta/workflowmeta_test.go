@@ -41,6 +41,28 @@ func TestMetadataIsComplete(t *testing.T) {
 	}
 }
 
+func TestMetadataShortWorkflowSHA(t *testing.T) {
+	tests := []struct {
+		name string
+		sha  string
+		want string
+	}{
+		{"full sha", "abcdef1234567890", "abcdef1"},
+		{"exact 7 chars", "abcdef1", "abcdef1"},
+		{"short sha", "abc", "abc"},
+		{"empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := Metadata{WorkflowSHA: tt.sha}
+			if got := m.ShortWorkflowSHA(); got != tt.want {
+				t.Errorf("ShortWorkflowSHA() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMetadataProvenanceText(t *testing.T) {
 	t.Run("complete metadata generates provenance links", func(t *testing.T) {
 		meta := Metadata{
@@ -52,7 +74,7 @@ func TestMetadataProvenanceText(t *testing.T) {
 			WorkflowFilePath:   ".github/workflows/reusable-automerge.yml",
 		}
 
-		expected := "Merged automatically by [workflow run](https://github.com/kachick/workflows/actions/runs/12345678) (defined at [kachick/workflows](https://github.com/kachick/workflows/blob/abcdef123456/.github/workflows/reusable-automerge.yml))."
+		expected := "Merged automatically by [workflow run](https://github.com/kachick/workflows/actions/runs/12345678) (defined at [kachick/workflows@abcdef1](https://github.com/kachick/workflows/blob/abcdef123456/.github/workflows/reusable-automerge.yml))."
 		got := meta.ProvenanceText("Merged automatically")
 		if got != expected {
 			t.Errorf("got %q, want %q", got, expected)

@@ -102,7 +102,7 @@ func TestBuildPRBody(t *testing.T) {
 		WorkflowFilePath:   ".github/workflows/reusable-bump-flake-lock.yml",
 	}
 
-	expectedHeader := "This PR was generated automatically by [workflow run](https://github.com/kachick/workflows/actions/runs/12345678) (defined at [kachick/workflows](https://github.com/kachick/workflows/blob/c4c03dd9c5377b99ca53183897baaf53114b86db/.github/workflows/reusable-bump-flake-lock.yml))."
+	expectedHeader := "This PR was generated automatically by [workflow run](https://github.com/kachick/workflows/actions/runs/12345678) (defined at [kachick/workflows@c4c03dd](https://github.com/kachick/workflows/blob/c4c03dd9c5377b99ca53183897baaf53114b86db/.github/workflows/reusable-bump-flake-lock.yml))."
 
 	t.Run("complete metadata without custom body", func(t *testing.T) {
 		body, err := buildPRBody("", completeMeta, true)

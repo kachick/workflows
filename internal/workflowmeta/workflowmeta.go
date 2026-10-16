@@ -69,12 +69,20 @@ func (m Metadata) BlobPermalink(relativePath string) string {
 	return fmt.Sprintf("%s/%s/blob/%s/%s", serverURL, repo, rev, relativePath)
 }
 
+// ShortWorkflowSHA returns the first 7 characters of WorkflowSHA for compact display.
+func (m Metadata) ShortWorkflowSHA() string {
+	if len(m.WorkflowSHA) > 7 {
+		return m.WorkflowSHA[:7]
+	}
+	return m.WorkflowSHA
+}
+
 // ProvenanceText formats a Markdown sentence with run and definition links if metadata is complete.
 // If metadata is incomplete, it returns a plain sentence without links.
 func (m Metadata) ProvenanceText(action string) string {
 	if m.IsComplete() {
-		return fmt.Sprintf("%s by [workflow run](%s) (defined at [%s](%s)).",
-			action, m.RunURL(), m.WorkflowRepository, m.WorkflowPermalink())
+		return fmt.Sprintf("%s by [workflow run](%s) (defined at [%s@%s](%s)).",
+			action, m.RunURL(), m.WorkflowRepository, m.ShortWorkflowSHA(), m.WorkflowPermalink())
 	}
 	return fmt.Sprintf("%s.", action)
 }
