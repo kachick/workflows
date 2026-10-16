@@ -91,3 +91,45 @@ func TestGet(t *testing.T) {
 		t.Errorf("expected Get() to return complete metadata with env vars")
 	}
 }
+
+func TestVerifyEnv(t *testing.T) {
+	t.Run("outside GitHub Actions allows any owner and event", func(t *testing.T) {
+		t.Setenv("GITHUB_ACTIONS", "false")
+		t.Setenv("GITHUB_REPOSITORY_OWNER", "other-user")
+		t.Setenv("GITHUB_EVENT_NAME", "pull_request_target")
+
+		if err := VerifyEnv(); err != nil {
+			t.Errorf("expected nil outside GitHub Actions, got %v", err)
+		}
+	})
+
+	t.Run("in GitHub Actions allows kachick on safe event", func(t *testing.T) {
+		t.Setenv("GITHUB_ACTIONS", "true")
+		t.Setenv("GITHUB_REPOSITORY_OWNER", "kachick")
+		t.Setenv("GITHUB_EVENT_NAME", "pull_request")
+
+		if err := VerifyEnv(); err != nil {
+			t.Errorf("expected nil for kachick on pull_request, got %v", err)
+		}
+	})
+
+	t.Run("in GitHub Actions rejects pull_request_target", func(t *testing.T) {
+		t.Setenv("GITHUB_ACTIONS", "true")
+		t.Setenv("GITHUB_REPOSITORY_OWNER", "kachick")
+		t.Setenv("GITHUB_EVENT_NAME", "pull_request_target")
+
+		if err := VerifyEnv(); err == nil {
+			t.Error("expected error for pull_request_target, got nil")
+		}
+	})
+
+	t.Run("in GitHub Actions rejects other repository owners", func(t *testing.T) {
+		t.Setenv("GITHUB_ACTIONS", "true")
+		t.Setenv("GITHUB_REPOSITORY_OWNER", "other-user")
+		t.Setenv("GITHUB_EVENT_NAME", "push")
+
+		if err := VerifyEnv(); err == nil {
+			t.Error("expected error for non-kachick owner, got nil")
+		}
+	})
+}

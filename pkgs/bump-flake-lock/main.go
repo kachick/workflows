@@ -46,6 +46,10 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
+	if err := workflowmeta.VerifyEnv(); err != nil {
+		return err
+	}
+
 	cfg, err := parseConfig(args)
 	if err != nil {
 		return err

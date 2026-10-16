@@ -41,6 +41,7 @@ permissions:
 jobs:
   diff:
     name: Diff closures
+    if: github.repository_owner == 'kachick' # Specialized for personal use; skip on forks and other owners
     permissions:
       contents: read
       pull-requests: write # Post closure differences to PR comments

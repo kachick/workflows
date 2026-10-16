@@ -60,3 +60,29 @@ func (m Metadata) ProvenanceText(action string) string {
 	}
 	return fmt.Sprintf("%s.", action)
 }
+
+// ExpectedOwner is the only GitHub owner supported by these personal workflows.
+const ExpectedOwner = "kachick"
+
+// VerifyEnv checks that the GitHub Actions environment is safe and owned by ExpectedOwner.
+// Outside GitHub Actions (when GITHUB_ACTIONS != "true"), it returns nil so local runs and tests work.
+//
+// Why not check pull_request_target in workflow YAML `if:` conditions:
+//  1. GitHub Actions has no way to share `if:` expressions across workflow files.
+//  2. Putting `pull_request_target` in every workflow YAML makes humans and LLMs wonder at first glance
+//     if the workflow actually uses that unsafe trigger, adding noise to every file.
+func VerifyEnv() error {
+	if os.Getenv("GITHUB_ACTIONS") != "true" {
+		return nil
+	}
+
+	if event := os.Getenv("GITHUB_EVENT_NAME"); event == "pull_request_target" {
+		return fmt.Errorf("refusing to run on unsafe event %q", event)
+	}
+
+	if owner := os.Getenv("GITHUB_REPOSITORY_OWNER"); owner != ExpectedOwner {
+		return fmt.Errorf("unsupported repository owner %q (only %q is supported)", owner, ExpectedOwner)
+	}
+
+	return nil
+}

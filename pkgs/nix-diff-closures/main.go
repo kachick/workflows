@@ -25,6 +25,10 @@ func main() {
 }
 
 func run() error {
+	if err := workflowmeta.VerifyEnv(); err != nil {
+		return err
+	}
+
 	var (
 		baseRev        string
 		targets        string
