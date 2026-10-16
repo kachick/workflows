@@ -44,6 +44,10 @@ Preserve the following invariants when modifying or extending `automerge`:
   - Copilot approvals act as positive approvals, while `automerge` LLM reviews and OSV-Scanner act as negative veto filters. Keeping both provides defense in depth:
     - In a real test ([`kachick/infra-test#1`](https://github.com/kachick/infra-test/pull/1#pullrequestreview-5548352008)), a pull request titled "Add Copyleft license" added an MIT license instead. Copilot noted the difference in its summary table but still recommended approval without flagging a problem.
     - Relying only on positive approvals allows subtle mismatches or prompt injections to pass through. Keeping negative veto filters (`automerge:vetoed`) remains essential.
+  - **Billing protection and bot PR limits in personal repositories**:
+    - GitHub charges AI credit consumption to the pull request author, not the repository owner. This protects public repositories from billing drains by spam pull requests from forks.
+    - Because third-party bots (such as Renovate or Dependabot) do not hold personal Copilot licenses, automatic reviews do not run for bot pull requests in personal repositories.
+    - Therefore, personal repositories cannot rely on Copilot code review for automated bot merges. Running custom LLM review (`llm-veto`) with controlled API keys remains necessary to inspect bot pull requests.
 - **Why OSV-Scanner runs before LLM review**:
   - `osv-scanner` deterministically compares base and PR trees to catch newly introduced CVEs in lockfiles (`flake.lock`, `go.mod`, `Cargo.lock`, `package-lock.json`, etc.).
   - Running this check first rejects known vulnerabilities immediately without spending LLM API tokens.
