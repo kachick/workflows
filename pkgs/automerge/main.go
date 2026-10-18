@@ -32,9 +32,12 @@ var defaultAllowedBots = []string{
 }
 
 var (
-	dependabotBumpRegex   = regexp.MustCompile(`^Bump (?P<pkg>.+) from (?P<old>[^ ]+) to (?P<new>[^ ]+)(?: in .+)?$`)
-	renovateTableRowRegex = regexp.MustCompile(`(?m)^\|\s*(?:\[(?P<pkg>[^\]]+)\]\([^)]+\)|(?P<rawpkg>[^|]+?))\s*\|(?:[^|\n]*\|)*?\s*(?:(?P<update>[a-zA-Z]+)\s*\|\s*)?[^|\n]*?` + "`(?P<old>[^`]+)`" + `\s*(?:→|->)\s*` + "`(?P<new>[^`]+)`")
-	hexDigestRegex        = regexp.MustCompile(`^(?:sha256:)?[0-9a-f]{7,64}$`)
+	dependabotBumpTitleRegex   = regexp.MustCompile(`^(?:(?i:build|chore|fix|ci)(?:\([^)]+\))?:\s*)?(?:Bump|Update)\s+(?P<pkg>.+?)(?:\s+requirement)?\s+from\s+(?P<old>[^ ]+)\s+to\s+(?P<new>[^ ]+)(?:\s+in\s+.+)?$`)
+	dependabotBodyUpdateRegex  = regexp.MustCompile(`(?m)^\s*(?:Updates?|Updated|Bumps?|Bumped)\s+(?:` + "`(?P<pkg1>[^`]+)`" + `|\[(?P<pkg2>[^\]]+)\]\([^)]+\)|(?P<pkg3>[^ \n]+))\s+from\s+(?P<old>[^ \n]+)\s+to\s+(?P<new>[^ \n]+)`)
+	dependabotGroupHeaderRegex = regexp.MustCompile(`(?i)\bwith\s+(\d+)\s+updates?\b`)
+	detailsTagRegex            = regexp.MustCompile(`(?s)<details\b[^>]*>.*?</details>`)
+	renovateTableRowRegex      = regexp.MustCompile(`(?m)^\|\s*(?:\[(?P<pkg>[^\]]+)\]\([^)]+\)|(?P<rawpkg>[^|]+?))\s*\|(?:[^|\n]*\|)*?\s*(?:(?P<update>[a-zA-Z]+)\s*\|\s*)?[^|\n]*?` + "`(?P<old>[^`]+)`" + `\s*(?:→|->)\s*` + "`(?P<new>[^`]+)`")
+	hexDigestRegex             = regexp.MustCompile(`^(?:sha256:)?[0-9a-f]{7,64}$`)
 )
 
 const (
@@ -59,18 +62,50 @@ const (
 	ActionSkipped PRAction = "Skipped"
 )
 
+type PRSource string
+
+const (
+	SourceLabel         PRSource = "Label"
+	SourceAuthor        PRSource = "Author"
+	SourceDraft         PRSource = "Draft"
+	SourceMergeable     PRSource = "Mergeable"
+	SourceCI            PRSource = "CI"
+	SourceVersionBump   PRSource = "Version bump policy"
+	SourceDiff          PRSource = "Diff"
+	SourceVulnerability PRSource = "Vulnerability scan"
+	SourceLLMReview     PRSource = "LLM review"
+	SourceMerge         PRSource = "Merge"
+)
+
+type StepStatus int
+
+const (
+	StepPassed StepStatus = iota
+	StepFailed
+	StepSkipped
+)
+
+type EvaluationStep struct {
+	Name    string
+	Status  StepStatus
+	Details string
+}
+
 type PRSummaryResult struct {
 	Number int
 	Title  string
 	Author string
 	Action PRAction
+	Source PRSource
 	Reason string
 }
 
 type EligibilityResult struct {
 	Eligible bool
 	Blocked  bool
+	Source   PRSource
 	Reason   string
+	Steps    []EvaluationStep
 }
 
 type PullRequest struct {
@@ -326,26 +361,101 @@ func isDigestBump(oldVer, newVer string) bool {
 	return hexDigestRegex.MatchString(cleanOld) && hexDigestRegex.MatchString(cleanNew)
 }
 
-func checkDependabotBump(title string) (disallowed bool, reason string) {
-	matches := dependabotBumpRegex.FindStringSubmatch(title)
-	if matches == nil {
-		// Disallow group updates and unrecognized titles because their versions cannot be checked from the title.
-		return true, "unrecognized title format or group update"
+func cleanVersion(v string) string {
+	v = strings.Trim(v, "`")
+	v = strings.TrimRight(v, ".,;:")
+	return v
+}
+
+func cleanDependabotBody(body string) string {
+	content := body
+	// Stop before dependabot command sections, comments, or horizontal rules marking metadata.
+	for _, marker := range []string{
+		"[//]: # (dependabot-automerge-start)",
+		"Dependabot commands and options",
+		"\n---",
+	} {
+		if idx := strings.Index(content, marker); idx != -1 {
+			content = content[:idx]
+		}
+	}
+	// Strip out <details>...</details> blocks to avoid matching release notes, changelogs, or commit logs.
+	content = detailsTagRegex.ReplaceAllString(content, "")
+	return content
+}
+
+func checkDependabotBump(title, body string) (disallowed bool, reason string) {
+	if matches := dependabotBumpTitleRegex.FindStringSubmatch(title); matches != nil {
+		pkgIndex := dependabotBumpTitleRegex.SubexpIndex("pkg")
+		oldIndex := dependabotBumpTitleRegex.SubexpIndex("old")
+		newIndex := dependabotBumpTitleRegex.SubexpIndex("new")
+
+		pkg := strings.TrimSpace(matches[pkgIndex])
+		oldVer := cleanVersion(matches[oldIndex])
+		newVer := cleanVersion(matches[newIndex])
+
+		if isDigestBump(oldVer, newVer) {
+			return false, "allowed digest update"
+		}
+
+		return checkVersionBump(pkg, oldVer, newVer)
 	}
 
-	pkgIndex := dependabotBumpRegex.SubexpIndex("pkg")
-	oldIndex := dependabotBumpRegex.SubexpIndex("old")
-	newIndex := dependabotBumpRegex.SubexpIndex("new")
-
-	pkg := matches[pkgIndex]
-	oldVer := strings.Trim(matches[oldIndex], "`")
-	newVer := strings.Trim(matches[newIndex], "`")
-
-	if isDigestBump(oldVer, newVer) {
-		return false, "allowed digest update"
+	cleanedBody := cleanDependabotBody(body)
+	matches := dependabotBodyUpdateRegex.FindAllStringSubmatch(cleanedBody, -1)
+	if len(matches) == 0 {
+		return true, "unrecognized title format or no updates found in body"
 	}
 
-	return checkVersionBump(pkg, oldVer, newVer)
+	var expectedCount int
+	if headerMatch := dependabotGroupHeaderRegex.FindStringSubmatch(title); headerMatch != nil {
+		expectedCount, _ = strconv.Atoi(headerMatch[1])
+	} else if headerMatch := dependabotGroupHeaderRegex.FindStringSubmatch(cleanedBody); headerMatch != nil {
+		expectedCount, _ = strconv.Atoi(headerMatch[1])
+	}
+
+	if expectedCount > 0 && len(matches) != expectedCount {
+		return true, fmt.Sprintf("unrecognized body format: found %d updates, expected %d", len(matches), expectedCount)
+	}
+
+	pkg1Index := dependabotBodyUpdateRegex.SubexpIndex("pkg1")
+	pkg2Index := dependabotBodyUpdateRegex.SubexpIndex("pkg2")
+	pkg3Index := dependabotBodyUpdateRegex.SubexpIndex("pkg3")
+	oldIndex := dependabotBodyUpdateRegex.SubexpIndex("old")
+	newIndex := dependabotBodyUpdateRegex.SubexpIndex("new")
+
+	lastReason := "non-breaking update"
+	for _, match := range matches {
+		pkg := match[pkg1Index]
+		if pkg == "" {
+			pkg = match[pkg2Index]
+		}
+		if pkg == "" {
+			pkg = match[pkg3Index]
+		}
+		pkg = strings.TrimSpace(pkg)
+		oldVer := cleanVersion(match[oldIndex])
+		newVer := cleanVersion(match[newIndex])
+
+		if isDigestBump(oldVer, newVer) {
+			lastReason = "allowed digest update"
+			continue
+		}
+
+		disallowed, reason := checkVersionBump(pkg, oldVer, newVer)
+		if disallowed {
+			if len(matches) > 1 {
+				return true, fmt.Sprintf("major update for %s (%s -> %s)", pkg, oldVer, newVer)
+			}
+			return true, reason
+		}
+		lastReason = reason
+	}
+
+	if len(matches) == 1 {
+		return false, lastReason
+	}
+	return false, fmt.Sprintf("non-breaking updates (%d packages)", len(matches))
 }
 
 func countMarkdownTableDataRows(content string) int {
@@ -421,7 +531,7 @@ func checkRenovateBump(body string) (disallowed bool, reason string) {
 }
 
 func isDisallowedDependabotMajor(title string) bool {
-	disallowed, _ := checkDependabotBump(title)
+	disallowed, _ := checkDependabotBump(title, "")
 	return disallowed
 }
 
@@ -444,18 +554,84 @@ func hasLabel(pr PullRequest, name string) bool {
 }
 
 func checkEligibility(pr PullRequest, allowedBots []string, meta workflowmeta.Metadata) EligibilityResult {
+	var steps []EvaluationStep
+
+	// Step 1: Author check
+	if !isAllowedBot(pr.Author.Login, allowedBots) {
+		steps = append(steps, EvaluationStep{
+			Name:    "Author is in allowed bots",
+			Status:  StepFailed,
+			Details: fmt.Sprintf("author %q is not in allowed bots", pr.Author.Login),
+		})
+		return EligibilityResult{
+			Eligible: false,
+			Blocked:  false,
+			Source:   SourceAuthor,
+			Reason:   fmt.Sprintf("author %q is not in allowed bots", pr.Author.Login),
+			Steps:    steps,
+		}
+	}
+	steps = append(steps, EvaluationStep{
+		Name:    "Author is in allowed bots",
+		Status:  StepPassed,
+		Details: "@" + pr.Author.Login,
+	})
+
+	// Step 2: Draft check
+	if pr.IsDraft {
+		steps = append(steps, EvaluationStep{
+			Name:    "PR is not a draft",
+			Status:  StepFailed,
+			Details: "PR is a draft",
+		})
+		return EligibilityResult{
+			Eligible: false,
+			Blocked:  false,
+			Source:   SourceDraft,
+			Reason:   "PR is a draft",
+			Steps:    steps,
+		}
+	}
+	steps = append(steps, EvaluationStep{
+		Name:   "PR is not a draft",
+		Status: StepPassed,
+	})
+
+	// Step 3: Labels check
 	if hasLabel(pr, vetoLabelName) {
-		return EligibilityResult{Eligible: false, Blocked: false, Reason: fmt.Sprintf("PR has %q label", vetoLabelName)}
+		steps = append(steps, EvaluationStep{
+			Name:    "PR has no veto or block labels",
+			Status:  StepFailed,
+			Details: fmt.Sprintf("PR has %q label", vetoLabelName),
+		})
+		return EligibilityResult{
+			Eligible: false,
+			Blocked:  false,
+			Source:   SourceLabel,
+			Reason:   fmt.Sprintf("PR has %q label", vetoLabelName),
+			Steps:    steps,
+		}
 	}
 	if hasLabel(pr, blockedLabelName) {
-		return EligibilityResult{Eligible: false, Blocked: true, Reason: fmt.Sprintf("PR has %q label", blockedLabelName)}
+		steps = append(steps, EvaluationStep{
+			Name:    "PR has no veto or block labels",
+			Status:  StepFailed,
+			Details: fmt.Sprintf("PR has %q label", blockedLabelName),
+		})
+		return EligibilityResult{
+			Eligible: false,
+			Blocked:  true,
+			Source:   SourceLabel,
+			Reason:   fmt.Sprintf("PR has %q label", blockedLabelName),
+			Steps:    steps,
+		}
 	}
-	if !isAllowedBot(pr.Author.Login, allowedBots) {
-		return EligibilityResult{Eligible: false, Blocked: false, Reason: fmt.Sprintf("author %q is not in allowed bots", pr.Author.Login)}
-	}
-	if pr.IsDraft {
-		return EligibilityResult{Eligible: false, Blocked: false, Reason: "PR is a draft"}
-	}
+	steps = append(steps, EvaluationStep{
+		Name:   "PR has no veto or block labels",
+		Status: StepPassed,
+	})
+
+	// Step 4: Mergeable check
 	if pr.Mergeable != "MERGEABLE" {
 		var reason string
 		switch pr.Mergeable {
@@ -466,34 +642,133 @@ func checkEligibility(pr PullRequest, allowedBots []string, meta workflowmeta.Me
 		default:
 			reason = fmt.Sprintf("GitHub MergeableState is %q", pr.Mergeable)
 		}
-		return EligibilityResult{Eligible: false, Blocked: false, Reason: reason}
+		steps = append(steps, EvaluationStep{
+			Name:    "GitHub mergeable state is clean",
+			Status:  StepFailed,
+			Details: reason,
+		})
+		return EligibilityResult{
+			Eligible: false,
+			Blocked:  false,
+			Source:   SourceMergeable,
+			Reason:   reason,
+			Steps:    steps,
+		}
 	}
+	steps = append(steps, EvaluationStep{
+		Name:    "GitHub mergeable state is clean",
+		Status:  StepPassed,
+		Details: "MERGEABLE",
+	})
+
+	// Step 5: Status checks rollup
 	if len(pr.StatusCheckRollup) == 0 {
-		return EligibilityResult{Eligible: false, Blocked: false, Reason: "no status checks found"}
+		steps = append(steps, EvaluationStep{
+			Name:    "All status checks completed successfully",
+			Status:  StepFailed,
+			Details: "no status checks found",
+		})
+		return EligibilityResult{
+			Eligible: false,
+			Blocked:  false,
+			Source:   SourceCI,
+			Reason:   "no status checks found",
+			Steps:    steps,
+		}
 	}
 
-	// Accept SUCCESS, SKIPPED, and NEUTRAL check conclusions once completed.
 	for _, check := range pr.StatusCheckRollup {
 		if check.Status != "COMPLETED" {
-			return EligibilityResult{Eligible: false, Blocked: false, Reason: fmt.Sprintf("status check is not completed (status: %s)", check.Status)}
+			reason := fmt.Sprintf("status check is not completed (status: %s)", check.Status)
+			steps = append(steps, EvaluationStep{
+				Name:    "All status checks completed successfully",
+				Status:  StepFailed,
+				Details: reason,
+			})
+			return EligibilityResult{
+				Eligible: false,
+				Blocked:  false,
+				Source:   SourceCI,
+				Reason:   reason,
+				Steps:    steps,
+			}
 		}
 		if check.Conclusion != "SUCCESS" && check.Conclusion != "SKIPPED" && check.Conclusion != "NEUTRAL" {
-			return EligibilityResult{Eligible: false, Blocked: false, Reason: fmt.Sprintf("status check concluded with %q", check.Conclusion)}
+			reason := fmt.Sprintf("status check concluded with %q", check.Conclusion)
+			steps = append(steps, EvaluationStep{
+				Name:    "All status checks completed successfully",
+				Status:  StepFailed,
+				Details: reason,
+			})
+			return EligibilityResult{
+				Eligible: false,
+				Blocked:  false,
+				Source:   SourceCI,
+				Reason:   reason,
+				Steps:    steps,
+			}
 		}
 	}
+	steps = append(steps, EvaluationStep{
+		Name:    "All status checks completed successfully",
+		Status:  StepPassed,
+		Details: fmt.Sprintf("%d/%d checks passed", len(pr.StatusCheckRollup), len(pr.StatusCheckRollup)),
+	})
 
+	// Step 6: Version bump policy
+	lastBumpReason := "non-breaking update"
 	if strings.Contains(pr.Author.Login, "dependabot") {
-		if disallowed, reason := checkDependabotBump(pr.Title); disallowed {
-			return EligibilityResult{Eligible: false, Blocked: true, Reason: fmt.Sprintf("disallowed dependabot bump: %s", reason)}
+		if disallowed, reason := checkDependabotBump(pr.Title, pr.Body); disallowed {
+			fullReason := fmt.Sprintf("disallowed dependabot bump: %s", reason)
+			steps = append(steps, EvaluationStep{
+				Name:    "Version bump policy",
+				Status:  StepFailed,
+				Details: fullReason,
+			})
+			return EligibilityResult{
+				Eligible: false,
+				Blocked:  true,
+				Source:   SourceVersionBump,
+				Reason:   fullReason,
+				Steps:    steps,
+			}
+		} else {
+			lastBumpReason = reason
 		}
 	}
 	if strings.Contains(pr.Author.Login, "renovate") {
 		if disallowed, reason := checkRenovateBump(pr.Body); disallowed {
-			return EligibilityResult{Eligible: false, Blocked: true, Reason: fmt.Sprintf("disallowed renovate bump: %s", reason)}
+			fullReason := fmt.Sprintf("disallowed renovate bump: %s", reason)
+			steps = append(steps, EvaluationStep{
+				Name:    "Version bump policy",
+				Status:  StepFailed,
+				Details: fullReason,
+			})
+			return EligibilityResult{
+				Eligible: false,
+				Blocked:  true,
+				Source:   SourceVersionBump,
+				Reason:   fullReason,
+				Steps:    steps,
+			}
+		} else {
+			lastBumpReason = reason
 		}
 	}
 
-	return EligibilityResult{Eligible: true, Blocked: false, Reason: "eligible for merge"}
+	steps = append(steps, EvaluationStep{
+		Name:    "Version bump policy",
+		Status:  StepPassed,
+		Details: lastBumpReason,
+	})
+
+	return EligibilityResult{
+		Eligible: true,
+		Blocked:  false,
+		Source:   SourceVersionBump,
+		Reason:   "eligible for merge",
+		Steps:    steps,
+	}
 }
 
 func isEligible(pr PullRequest, allowedBots []string) bool {
@@ -1131,6 +1406,63 @@ func formatAuthor(author string) string {
 	return "@" + author
 }
 
+func formatEvaluationSteps(steps []EvaluationStep) string {
+	if len(steps) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Requirements for automerge:\n")
+	for _, s := range steps {
+		var icon string
+		switch s.Status {
+		case StepPassed:
+			icon = ":white_check_mark:"
+		case StepFailed:
+			icon = ":x:"
+		case StepSkipped:
+			icon = ":white_large_square:"
+		}
+
+		if s.Status == StepSkipped || s.Details == "" {
+			sb.WriteString(fmt.Sprintf("- %s %s\n", icon, s.Name))
+		} else {
+			sb.WriteString(fmt.Sprintf("- %s %s: %s\n", icon, s.Name, s.Details))
+		}
+	}
+	return sb.String()
+}
+
+func completeSkippedSteps(steps []EvaluationStep, cfg *Config) []EvaluationStep {
+	result := make([]EvaluationStep, len(steps))
+	copy(result, steps)
+
+	hasVuln := false
+	hasLLM := false
+	hasMerge := false
+	for _, s := range result {
+		if strings.HasPrefix(s.Name, "Vulnerability scan") {
+			hasVuln = true
+		}
+		if strings.HasPrefix(s.Name, "LLM review") {
+			hasLLM = true
+		}
+		if strings.HasPrefix(s.Name, "Merge PR") {
+			hasMerge = true
+		}
+	}
+	if cfg != nil && cfg.OSVScanner && !hasVuln {
+		result = append(result, EvaluationStep{Name: "Vulnerability scan (OSV-Scanner)", Status: StepSkipped})
+	}
+	if cfg != nil && cfg.LLMVeto && !hasLLM {
+		result = append(result, EvaluationStep{Name: "LLM review (Gemini)", Status: StepSkipped})
+	}
+	if !hasMerge {
+		result = append(result, EvaluationStep{Name: "Merge PR", Status: StepSkipped})
+	}
+	return result
+}
+
 func buildStepSummary(results []PRSummaryResult, meta workflowmeta.Metadata) string {
 	if len(results) == 0 {
 		return "### 🤖 Automerge Summary\n\nNo open pull requests found.\n"
@@ -1138,8 +1470,8 @@ func buildStepSummary(results []PRSummaryResult, meta workflowmeta.Metadata) str
 
 	var sb strings.Builder
 	sb.WriteString("### 🤖 Automerge Summary\n\n")
-	sb.WriteString("| PR | Author | Result | Reason |\n")
-	sb.WriteString("|---|---|---|---|\n")
+	sb.WriteString("| PR | Author | Result | Source | Reason |\n")
+	sb.WriteString("|---|---|---|---|---|\n")
 
 	for _, r := range results {
 		cleanTitle := strings.ReplaceAll(r.Title, "|", `\|`)
@@ -1168,8 +1500,24 @@ func buildStepSummary(results []PRSummaryResult, meta workflowmeta.Metadata) str
 
 		cleanReason := strings.ReplaceAll(r.Reason, "|", `\|`)
 		cleanReason = strings.ReplaceAll(cleanReason, "\n", " ")
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n", prLink, formatAuthor(r.Author), icon, cleanReason))
+		source := string(r.Source)
+		if source == "" {
+			source = "Unknown"
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s |\n", prLink, formatAuthor(r.Author), icon, source, cleanReason))
 	}
+
+	sb.WriteString("\n#### Source Descriptions\n")
+	sb.WriteString("- **Label**: Blocked or vetoed by an existing label (`automerge:blocked` or `automerge:vetoed`).\n")
+	sb.WriteString("- **Author**: Pull request author is not in the allowed bots list.\n")
+	sb.WriteString("- **Draft**: Pull request is in draft state.\n")
+	sb.WriteString("- **Mergeable**: GitHub mergeable state is not clean (e.g. unknown or conflicting).\n")
+	sb.WriteString("- **CI**: Status checks are incomplete or failed.\n")
+	sb.WriteString("- **Version bump policy**: Dependency update was disallowed (e.g. major version bump or unrecognized update format).\n")
+	sb.WriteString("- **Diff**: Failed to fetch pull request git diff.\n")
+	sb.WriteString("- **Vulnerability scan**: Differential vulnerability scan (`osv-scanner`) detected new vulnerabilities.\n")
+	sb.WriteString("- **LLM review**: LLM review flagged potential risks.\n")
+	sb.WriteString("- **Merge**: Pull request merge command failed (e.g. merge conflict).\n")
 
 	return sb.String()
 }
@@ -1206,7 +1554,10 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 		return nil
 	}
 
-	var eligible []PullRequest
+	var eligible []struct {
+		pr    PullRequest
+		steps []EvaluationStep
+	}
 	for _, pr := range prs {
 		res := checkEligibility(pr, cfg.AllowedBots, meta)
 		if !res.Eligible && pr.Mergeable == "UNKNOWN" && shouldRetryMergeable(pr, cfg.AllowedBots) {
@@ -1214,7 +1565,10 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 		}
 		if res.Eligible {
 			fmt.Printf("PR #%d (%s): eligible\n", pr.Number, pr.Title)
-			eligible = append(eligible, pr)
+			eligible = append(eligible, struct {
+				pr    PullRequest
+				steps []EvaluationStep
+			}{pr: pr, steps: res.Steps})
 		} else {
 			fmt.Printf("PR #%d (%s): skipped (%s)\n", pr.Number, pr.Title, res.Reason)
 			if res.Blocked {
@@ -1230,8 +1584,9 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					}
 					// Why post a comment only on first labeling:
 					// Avoid posting repetitive comments on every scheduled run.
-					commentBody := fmt.Sprintf("Automerge was skipped because %s. Marking with `%s` for manual review.\n\n%s",
-						res.Reason, blockedLabelName, meta.ProvenanceText("Inspected"))
+					fullSteps := completeSkippedSteps(res.Steps, cfg)
+					commentBody := fmt.Sprintf("Automerge was skipped because %s. Marking with `%s` for manual review.\n\n%s\n%s",
+						res.Reason, blockedLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
 					if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
 						fmt.Printf("Warning: failed to comment on blocked PR #%d: %v\n", pr.Number, err)
 					}
@@ -1241,6 +1596,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					Title:  pr.Title,
 					Author: pr.Author.Login,
 					Action: ActionBlocked,
+					Source: res.Source,
 					Reason: res.Reason,
 				})
 			} else {
@@ -1249,6 +1605,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					Title:  pr.Title,
 					Author: pr.Author.Login,
 					Action: ActionSkipped,
+					Source: res.Source,
 					Reason: res.Reason,
 				})
 			}
@@ -1260,7 +1617,11 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 		return nil
 	}
 
-	for _, pr := range eligible {
+	for _, item := range eligible {
+		pr := item.pr
+		prSteps := make([]EvaluationStep, len(item.steps))
+		copy(prSteps, item.steps)
+
 		diff, err := runner.FetchPRDiff(ctx, pr.Number)
 		if err != nil {
 			fmt.Printf("Warning: failed to fetch diff for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
@@ -1269,6 +1630,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 				Title:  pr.Title,
 				Author: pr.Author.Login,
 				Action: ActionSkipped,
+				Source: SourceDiff,
 				Reason: "failed to fetch PR diff",
 			})
 			continue
@@ -1284,6 +1646,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					Title:  pr.Title,
 					Author: pr.Author.Login,
 					Action: ActionSkipped,
+					Source: SourceVulnerability,
 					Reason: "vulnerability scan failed",
 				})
 				continue
@@ -1291,23 +1654,42 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 
 			if veto {
 				fmt.Printf("PR #%d (%s): VETOED by vulnerability scan: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
-				if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
-					fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
-				}
-				if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
-					fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
+				if !hasLabel(pr, vetoLabelName) {
+					if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
+						fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
+					}
+					if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
+						fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
+					}
+					vetoSteps := append(prSteps, EvaluationStep{
+						Name:    "Vulnerability scan (OSV-Scanner)",
+						Status:  StepFailed,
+						Details: reason,
+					})
+					fullSteps := completeSkippedSteps(vetoSteps, cfg)
+					commentBody := fmt.Sprintf("Automerge was vetoed by vulnerability scan: %s. Marking with `%s`.\n\n%s\n%s",
+						reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
+					if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
+						fmt.Printf("Warning: failed to comment on vetoed PR #%d: %v\n", pr.Number, err)
+					}
 				}
 				summaries = append(summaries, PRSummaryResult{
 					Number: pr.Number,
 					Title:  pr.Title,
 					Author: pr.Author.Login,
 					Action: ActionVetoed,
+					Source: SourceVulnerability,
 					Reason: fmt.Sprintf("vulnerability scan: %s", reason),
 				})
 				continue
 			}
 
 			fmt.Printf("PR #%d (%s): vulnerability scan passed: %s.\n", pr.Number, pr.Title, reason)
+			prSteps = append(prSteps, EvaluationStep{
+				Name:    "Vulnerability scan (OSV-Scanner)",
+				Status:  StepPassed,
+				Details: reason,
+			})
 		}
 
 		if cfg.LLMVeto {
@@ -1318,6 +1700,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					Title:  pr.Title,
 					Author: pr.Author.Login,
 					Action: ActionSkipped,
+					Source: SourceLLMReview,
 					Reason: "GEMINI_API_KEY is not set",
 				})
 				continue
@@ -1332,6 +1715,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					Title:  pr.Title,
 					Author: pr.Author.Login,
 					Action: ActionSkipped,
+					Source: SourceLLMReview,
 					Reason: "veto review failed",
 				})
 				continue
@@ -1339,23 +1723,42 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 
 			if veto {
 				fmt.Printf("PR #%d (%s): VETOED by review: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
-				if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
-					fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
-				}
-				if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
-					fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
+				if !hasLabel(pr, vetoLabelName) {
+					if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
+						fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
+					}
+					if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
+						fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
+					}
+					vetoSteps := append(prSteps, EvaluationStep{
+						Name:    "LLM review (Gemini)",
+						Status:  StepFailed,
+						Details: reason,
+					})
+					fullSteps := completeSkippedSteps(vetoSteps, cfg)
+					commentBody := fmt.Sprintf("Automerge was vetoed by LLM review: %s. Marking with `%s`.\n\n%s\n%s",
+						reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
+					if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
+						fmt.Printf("Warning: failed to comment on vetoed PR #%d: %v\n", pr.Number, err)
+					}
 				}
 				summaries = append(summaries, PRSummaryResult{
 					Number: pr.Number,
 					Title:  pr.Title,
 					Author: pr.Author.Login,
 					Action: ActionVetoed,
+					Source: SourceLLMReview,
 					Reason: fmt.Sprintf("review veto: %s", reason),
 				})
 				continue
 			}
 
 			fmt.Printf("PR #%d (%s): review passed: %s. Proceeding to merge.\n", pr.Number, pr.Title, reason)
+			prSteps = append(prSteps, EvaluationStep{
+				Name:    "LLM review (Gemini)",
+				Status:  StepPassed,
+				Details: reason,
+			})
 		}
 
 		fmt.Printf("Attempting to merge PR #%d (%s)...\n", pr.Number, pr.Title)
@@ -1366,13 +1769,20 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 				Title:  pr.Title,
 				Author: pr.Author.Login,
 				Action: ActionSkipped,
+				Source: SourceMerge,
 				Reason: "merge failed (possible conflict)",
 			})
 		} else {
 			fmt.Printf("Successfully merged PR #%d.\n", pr.Number)
+			prSteps = append(prSteps, EvaluationStep{
+				Name:    "Merge PR",
+				Status:  StepPassed,
+				Details: cfg.MergeMethod,
+			})
 			// Post comment after successful merge rather than before, because without merge queues,
 			// a merge attempt can fail due to race conditions or conflicts.
-			commentBody := meta.ProvenanceText("Merged automatically")
+			commentBody := fmt.Sprintf("Merged automatically.\n\n%s\n%s",
+				formatEvaluationSteps(prSteps), meta.ProvenanceText("Merged automatically"))
 			if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
 				fmt.Printf("Warning: failed to post merge comment for PR #%d: %v\n", pr.Number, err)
 			}
@@ -1381,6 +1791,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 				Title:  pr.Title,
 				Author: pr.Author.Login,
 				Action: ActionMerged,
+				Source: SourceMerge,
 				Reason: "merged successfully",
 			})
 		}

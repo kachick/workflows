@@ -945,60 +945,121 @@ func TestTruncateTextAndPrioritizeDiff(t *testing.T) {
 
 func TestCheckDependabotBump(t *testing.T) {
 	tests := []struct {
+		name       string
 		title      string
+		body       string
 		disallowed bool
 		wantReason string
 	}{
 		{
+			name:       "standard minor update",
 			title:      "Bump actions/checkout from 4.0.0 to 4.1.0",
 			disallowed: false,
 			wantReason: "non-breaking update",
 		},
 		{
+			name:       "standard major update",
 			title:      "Bump actions/checkout from 3.0.0 to 4.0.0",
 			disallowed: true,
 			wantReason: "major update (3.0.0 -> 4.0.0)",
 		},
 		{
+			name:       "0.x update",
 			title:      "Bump golang.org/x/sys from 0.48.0 to 0.49.0",
 			disallowed: false,
 			wantReason: "allowed 0.x or initial stable release",
 		},
 		{
+			name:       "0.x to 1.0.0 update",
 			title:      "Bump foo from 0.9.0 to 1.0.0",
 			disallowed: false,
 			wantReason: "allowed 0.x or initial stable release",
 		},
 		{
+			name:       "0.x to 2.0.0 update",
 			title:      "Bump foo from 0.1.0 to 2.0.0",
 			disallowed: true,
 			wantReason: "major update (0.1.0 -> 2.0.0)",
 		},
 		{
+			name:       "major update integer only",
 			title:      "Bump cachix/cachix-action from 14 to 15",
 			disallowed: true,
 			wantReason: "major update (14 -> 15)",
 		},
 		{
+			name:       "container digest update in title",
 			title:      "Bump ghcr.io/kachick/ubuntu-26.04-nix-systemd from `99230df` to `8297d9b`",
 			disallowed: false,
 			wantReason: "allowed digest update",
 		},
 		{
+			name:       "update requirement in group title",
+			title:      "Update rubocop requirement from 1.91.0 to 1.92.0 in the rubocop-dependencies group",
+			disallowed: false,
+			wantReason: "non-breaking update",
+		},
+		{
+			name:       "update requirement in title without group",
+			title:      "Update rubocop requirement from 1.91.0 to 1.92.0",
+			disallowed: false,
+			wantReason: "non-breaking update",
+		},
+		{
+			name:       "group update title with empty body",
 			title:      "Bump the rust group with 2 updates",
 			disallowed: true,
-			wantReason: "unrecognized title format or group update",
+			wantReason: "unrecognized title format or no updates found in body",
+		},
+		{
+			name:  "group update with 2 non-breaking updates and release notes details",
+			title: "Bump the actions group with 2 updates",
+			body: "Bumps the actions group with 2 updates: [actions/upload-artifact](https://github.com/actions/upload-artifact) and [astral-sh/setup-uv](https://github.com/astral-sh/setup-uv).\n\n" +
+				"Updates `actions/upload-artifact` from 7.0.1 to 7.0.2\n" +
+				"<details>\n<summary>Release notes</summary>\nUpdates foo from 1.0.0 to 2.0.0 in changelog\n</details>\n\n" +
+				"Updates `astral-sh/setup-uv` from 10.2.0 to 10.3.0\n" +
+				"<details>\n<summary>Release notes</summary>\n</details>\n\n" +
+				"[//]: # (dependabot-automerge-start)\n",
+			disallowed: false,
+			wantReason: "non-breaking updates (2 packages)",
+		},
+		{
+			name:  "group update with a major bump in one package",
+			title: "Bump the nextjs group with 2 updates",
+			body: "Bumps the nextjs group with 2 updates: [eslint-config-next](https://github.com/vercel/next.js) and [next](https://github.com/vercel/next.js).\n\n" +
+				"Updates `eslint-config-next` from 16.3.8 to 16.4.1\n\n" +
+				"Updates `next` from 15.5.24 to 16.4.1\n",
+			disallowed: true,
+			wantReason: "major update for next (15.5.24 -> 16.4.1)",
+		},
+		{
+			name:  "group update with updated link format",
+			title: "Bump the grouped-dependencies group with 2 updates",
+			body: "Updated [Swashbuckle.AspNetCore](https://github.com/domaindrivendev/Swashbuckle.AspNetCore) from 10.2.3 to 10.3.0.\n\n" +
+				"Updated [xunit.runner.visualstudio](https://github.com/xunit/visualstudio.xunit) from 4.0.0 to 4.0.1.\n",
+			disallowed: false,
+			wantReason: "non-breaking updates (2 packages)",
+		},
+		{
+			name:  "group update with count mismatch fails closed",
+			title: "Bump the actions group with 3 updates",
+			body: "Updates `actions/upload-artifact` from 7.0.1 to 7.0.2\n" +
+				"Updates `astral-sh/setup-uv` from 10.2.0 to 10.3.0\n",
+			disallowed: true,
+			wantReason: "unrecognized body format: found 2 updates, expected 3",
 		},
 	}
 
 	for _, tc := range tests {
-		disallowed, reason := checkDependabotBump(tc.title)
-		if disallowed != tc.disallowed {
-			t.Errorf("checkDependabotBump(%q) disallowed = %v, want %v", tc.title, disallowed, tc.disallowed)
-		}
-		if reason != tc.wantReason {
-			t.Errorf("checkDependabotBump(%q) reason = %q, want %q", tc.title, reason, tc.wantReason)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			disallowed, reason := checkDependabotBump(tc.title, tc.body)
+			if disallowed != tc.disallowed {
+				t.Errorf("checkDependabotBump(%q) disallowed = %v, want %v", tc.title, disallowed, tc.disallowed)
+			}
+			if reason != tc.wantReason {
+				t.Errorf("checkDependabotBump(%q) reason = %q, want %q", tc.title, reason, tc.wantReason)
+			}
+		})
 	}
 }
 
@@ -1553,9 +1614,14 @@ func TestExecutePostsMergeComment(t *testing.T) {
 	if len(runner.comments[501]) != 1 {
 		t.Fatalf("expected 1 comment on PR 501, got %v", runner.comments[501])
 	}
-	expectedComment := meta.ProvenanceText("Merged automatically")
-	if runner.comments[501][0] != expectedComment {
-		t.Errorf("expected comment %q, got %q", expectedComment, runner.comments[501][0])
+	if !strings.Contains(runner.comments[501][0], "Merged automatically.") {
+		t.Errorf("expected comment on 501 to contain 'Merged automatically.', got %q", runner.comments[501][0])
+	}
+	if !strings.Contains(runner.comments[501][0], "Requirements for automerge:") {
+		t.Errorf("expected comment on 501 to contain evaluation steps, got %q", runner.comments[501][0])
+	}
+	if !strings.Contains(runner.comments[501][0], meta.ProvenanceText("Merged automatically")) {
+		t.Errorf("expected comment on 501 to contain provenance link, got %q", runner.comments[501][0])
 	}
 
 	// 502 failed to merge, so comment must NOT be posted
@@ -1671,6 +1737,7 @@ func TestBuildStepSummary(t *testing.T) {
 				Title:  "Update foo | bar",
 				Author: "renovate[bot]",
 				Action: ActionMerged,
+				Source: SourceMerge,
 				Reason: "merged successfully",
 			},
 			{
@@ -1678,6 +1745,7 @@ func TestBuildStepSummary(t *testing.T) {
 				Title:  "Major update",
 				Author: "dependabot[bot]",
 				Action: ActionBlocked,
+				Source: SourceVersionBump,
 				Reason: "major update (1.0 -> 2.0)",
 			},
 			{
@@ -1685,6 +1753,7 @@ func TestBuildStepSummary(t *testing.T) {
 				Title:  "Vetoed update",
 				Author: "app/renovate",
 				Action: ActionVetoed,
+				Source: SourceLLMReview,
 				Reason: "suspicious code",
 			},
 			{
@@ -1692,6 +1761,7 @@ func TestBuildStepSummary(t *testing.T) {
 				Title:  "Pending checks",
 				Author: "samuebot[bot]",
 				Action: ActionSkipped,
+				Source: SourceCI,
 				Reason: "status check pending",
 			},
 			{
@@ -1699,27 +1769,65 @@ func TestBuildStepSummary(t *testing.T) {
 				Title:  "Human PR",
 				Author: "kachick",
 				Action: ActionSkipped,
+				Source: SourceAuthor,
 				Reason: "not in allowed bots",
 			},
 		}
 
 		summary := buildStepSummary(results, meta)
-		if !strings.Contains(summary, "| [#1](https://github.com/kachick/workflows/pull/1) Update foo \\| bar | [renovate[bot]](https://github.com/apps/renovate) | ✅ Merged | merged successfully |") {
+		if !strings.Contains(summary, "| [#1](https://github.com/kachick/workflows/pull/1) Update foo \\| bar | [renovate[bot]](https://github.com/apps/renovate) | ✅ Merged | Merge | merged successfully |") {
 			t.Errorf("expected merged row in summary, got:\n%s", summary)
 		}
-		if !strings.Contains(summary, "| [#2](https://github.com/kachick/workflows/pull/2) Major update | [dependabot[bot]](https://github.com/apps/dependabot) | ⚠️ Blocked | major update (1.0 -> 2.0) |") {
+		if !strings.Contains(summary, "| [#2](https://github.com/kachick/workflows/pull/2) Major update | [dependabot[bot]](https://github.com/apps/dependabot) | ⚠️ Blocked | Version bump policy | major update (1.0 -> 2.0) |") {
 			t.Errorf("expected blocked row in summary, got:\n%s", summary)
 		}
-		if !strings.Contains(summary, "| [#3](https://github.com/kachick/workflows/pull/3) Vetoed update | [renovate[bot]](https://github.com/apps/renovate) | 🚫 Vetoed | suspicious code |") {
+		if !strings.Contains(summary, "| [#3](https://github.com/kachick/workflows/pull/3) Vetoed update | [renovate[bot]](https://github.com/apps/renovate) | 🚫 Vetoed | LLM review | suspicious code |") {
 			t.Errorf("expected vetoed row in summary, got:\n%s", summary)
 		}
-		if !strings.Contains(summary, "| [#4](https://github.com/kachick/workflows/pull/4) Pending checks | [samuebot[bot]](https://github.com/apps/samuebot) | ⏭️ Skipped (transient) | status check pending |") {
+		if !strings.Contains(summary, "| [#4](https://github.com/kachick/workflows/pull/4) Pending checks | [samuebot[bot]](https://github.com/apps/samuebot) | ⏭️ Skipped (transient) | CI | status check pending |") {
 			t.Errorf("expected skipped row in summary, got:\n%s", summary)
 		}
-		if !strings.Contains(summary, "| [#5](https://github.com/kachick/workflows/pull/5) Human PR | @kachick | ⏭️ Skipped (transient) | not in allowed bots |") {
+		if !strings.Contains(summary, "| [#5](https://github.com/kachick/workflows/pull/5) Human PR | @kachick | ⏭️ Skipped (transient) | Author | not in allowed bots |") {
 			t.Errorf("expected human row in summary, got:\n%s", summary)
 		}
+		if !strings.Contains(summary, "#### Source Descriptions") {
+			t.Errorf("expected source descriptions in summary, got:\n%s", summary)
+		}
 	})
+}
+
+func TestFormatEvaluationSteps(t *testing.T) {
+	steps := []EvaluationStep{
+		{Name: "Author is in allowed bots", Status: StepPassed, Details: "@dependabot[bot]"},
+		{Name: "PR is not a draft", Status: StepPassed},
+		{Name: "PR has no veto or block labels", Status: StepPassed},
+		{Name: "GitHub mergeable state is clean", Status: StepPassed, Details: "MERGEABLE"},
+		{Name: "All status checks completed successfully", Status: StepPassed, Details: "2/2 checks passed"},
+		{Name: "Version bump policy", Status: StepFailed, Details: "disallowed dependabot bump: major update (1.0 -> 2.0)"},
+		{Name: "Vulnerability scan (OSV-Scanner)", Status: StepSkipped},
+		{Name: "LLM review (Gemini)", Status: StepSkipped},
+		{Name: "Merge PR", Status: StepSkipped},
+	}
+
+	formatted := formatEvaluationSteps(steps)
+	expectedLines := []string{
+		"Requirements for automerge:",
+		"- :white_check_mark: Author is in allowed bots: @dependabot[bot]",
+		"- :white_check_mark: PR is not a draft",
+		"- :white_check_mark: PR has no veto or block labels",
+		"- :white_check_mark: GitHub mergeable state is clean: MERGEABLE",
+		"- :white_check_mark: All status checks completed successfully: 2/2 checks passed",
+		"- :x: Version bump policy: disallowed dependabot bump: major update (1.0 -> 2.0)",
+		"- :white_large_square: Vulnerability scan (OSV-Scanner)",
+		"- :white_large_square: LLM review (Gemini)",
+		"- :white_large_square: Merge PR",
+	}
+
+	for _, line := range expectedLines {
+		if !strings.Contains(formatted, line) {
+			t.Errorf("formatEvaluationSteps() missing expected line %q, got:\n%s", line, formatted)
+		}
+	}
 }
 
 func TestFormatAuthor(t *testing.T) {
