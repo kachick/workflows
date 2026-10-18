@@ -73,7 +73,7 @@ const (
 	SourceVersionBump   PRSource = "Version bump policy"
 	SourceDiff          PRSource = "Diff"
 	SourceVulnerability PRSource = "Vulnerability scan"
-	SourceLLMReview     PRSource = "LLM review"
+	SourceLLMVeto       PRSource = "LLM veto"
 	SourceMerge         PRSource = "Merge"
 )
 
@@ -1444,7 +1444,7 @@ func completeSkippedSteps(steps []EvaluationStep, cfg *Config) []EvaluationStep 
 		if strings.HasPrefix(s.Name, "Vulnerability scan") {
 			hasVuln = true
 		}
-		if strings.HasPrefix(s.Name, "LLM review") {
+		if strings.HasPrefix(s.Name, "LLM veto") {
 			hasLLM = true
 		}
 		if strings.HasPrefix(s.Name, "Merge PR") {
@@ -1455,7 +1455,7 @@ func completeSkippedSteps(steps []EvaluationStep, cfg *Config) []EvaluationStep 
 		result = append(result, EvaluationStep{Name: "Vulnerability scan (OSV-Scanner)", Status: StepSkipped})
 	}
 	if cfg != nil && cfg.LLMVeto && !hasLLM {
-		result = append(result, EvaluationStep{Name: "LLM review (Gemini)", Status: StepSkipped})
+		result = append(result, EvaluationStep{Name: "LLM veto", Status: StepSkipped})
 	}
 	if !hasMerge {
 		result = append(result, EvaluationStep{Name: "Merge PR", Status: StepSkipped})
@@ -1516,7 +1516,7 @@ func buildStepSummary(results []PRSummaryResult, meta workflowmeta.Metadata) str
 	sb.WriteString("- **Version bump policy**: Dependency update was disallowed (e.g. major version bump or unrecognized update format).\n")
 	sb.WriteString("- **Diff**: Failed to fetch pull request git diff.\n")
 	sb.WriteString("- **Vulnerability scan**: Differential vulnerability scan (`osv-scanner`) detected new vulnerabilities.\n")
-	sb.WriteString("- **LLM review**: LLM review flagged potential risks.\n")
+	sb.WriteString("- **LLM veto**: LLM veto flagged potential risks.\n")
 	sb.WriteString("- **Merge**: Pull request merge command failed (e.g. merge conflict).\n")
 
 	return sb.String()
@@ -1700,29 +1700,29 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					Title:  pr.Title,
 					Author: pr.Author.Login,
 					Action: ActionSkipped,
-					Source: SourceLLMReview,
+					Source: SourceLLMVeto,
 					Reason: "GEMINI_API_KEY is not set",
 				})
 				continue
 			}
 
-			fmt.Printf("Running LLM veto review for PR #%d (%s)...\n", pr.Number, pr.Title)
+			fmt.Printf("Running LLM veto for PR #%d (%s)...\n", pr.Number, pr.Title)
 			veto, reason, err := reviewer.ReviewPR(ctx, pr, diff)
 			if err != nil {
-				fmt.Printf("Warning: veto review failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
+				fmt.Printf("Warning: LLM veto failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
 				summaries = append(summaries, PRSummaryResult{
 					Number: pr.Number,
 					Title:  pr.Title,
 					Author: pr.Author.Login,
 					Action: ActionSkipped,
-					Source: SourceLLMReview,
-					Reason: "veto review failed",
+					Source: SourceLLMVeto,
+					Reason: "LLM veto failed",
 				})
 				continue
 			}
 
 			if veto {
-				fmt.Printf("PR #%d (%s): VETOED by review: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
+				fmt.Printf("PR #%d (%s): VETOED by LLM veto: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
 				if !hasLabel(pr, vetoLabelName) {
 					if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
 						fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
@@ -1731,12 +1731,12 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 						fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
 					}
 					vetoSteps := append(prSteps, EvaluationStep{
-						Name:    "LLM review (Gemini)",
+						Name:    "LLM veto",
 						Status:  StepFailed,
 						Details: reason,
 					})
 					fullSteps := completeSkippedSteps(vetoSteps, cfg)
-					commentBody := fmt.Sprintf("Automerge was vetoed by LLM review: %s. Marking with `%s`.\n\n%s\n%s",
+					commentBody := fmt.Sprintf("Automerge was vetoed by LLM veto: %s. Marking with `%s`.\n\n%s\n%s",
 						reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
 					if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
 						fmt.Printf("Warning: failed to comment on vetoed PR #%d: %v\n", pr.Number, err)
@@ -1747,17 +1747,17 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					Title:  pr.Title,
 					Author: pr.Author.Login,
 					Action: ActionVetoed,
-					Source: SourceLLMReview,
-					Reason: fmt.Sprintf("review veto: %s", reason),
+					Source: SourceLLMVeto,
+					Reason: fmt.Sprintf("LLM veto: %s", reason),
 				})
 				continue
 			}
 
-			fmt.Printf("PR #%d (%s): review passed: %s. Proceeding to merge.\n", pr.Number, pr.Title, reason)
+			fmt.Printf("PR #%d (%s): LLM veto passed: no risks detected (%s). Proceeding to merge.\n", pr.Number, pr.Title, reason)
 			prSteps = append(prSteps, EvaluationStep{
-				Name:    "LLM review (Gemini)",
+				Name:    "LLM veto",
 				Status:  StepPassed,
-				Details: reason,
+				Details: "no risks detected",
 			})
 		}
 

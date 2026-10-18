@@ -16,14 +16,14 @@ Maintaining safe bot merges across `kachick/*` repositories requires strict secu
 Preserve the following invariants when modifying or extending `automerge`:
 
 1. **Negative Veto Only (Never Positive Allow)**:
-   - Vulnerability scans and LLM review act strictly as **negative veto filters** _after_ all deterministic checks pass (allowed bot author, non-draft status, `MERGEABLE` state, completed green CI checks, and allowed version bump).
+   - Vulnerability scans and LLM veto act strictly as **negative veto filters** _after_ all deterministic checks pass (allowed bot author, non-draft status, `MERGEABLE` state, completed green CI checks, and allowed version bump).
    - Never invert this flow to a positive "allow" model (such as merging because an LLM approved a diff, or letting an LLM bypass failing CI or major version blocks). In a positive allow model, prompt injection or model hallucinations directly cause unauthorized merges.
    - Keep the LLM strictly as a stateless risk analyzer: do not tell the model its pipeline role (such as "you are the final check" or "CI already passed"), and do not ask it whether to merge. How the model reacts to role pressure or prior green checks is unpredictable; Go code controls the workflow and makes the final veto decision from the reported severity.
 
 2. **Negative State Only (`automerge:vetoed`, `automerge:blocked`)**:
    - Pull request labels are used strictly as negative filters to stop automatic merging.
    - Because labels only deny merges, label tampering cannot escalate privileges:
-     - Removing a label simply causes deterministic checks, vulnerability scans, and LLM veto review to run again from scratch.
+     - Removing a label simply causes deterministic checks, vulnerability scans, and LLM veto to run again from scratch.
      - Adding a label only postpones merging.
    - Never introduce positive labels (such as `automerge:approved`) to authorize merges, because labels can be modified by bots or collaborators.
 
@@ -40,17 +40,17 @@ Preserve the following invariants when modifying or extending `automerge`:
   - GitHub blocks an account or App from approving its own pull requests. Managing a second bot account just to click approve adds secret management toil without real security value.
   - With [Copilot code review auto-approval](https://github.blog/changelog/2026-09-01-copilot-code-review-can-now-approve-pull-requests/) enabled, Copilot reviews diffs and can submit approvals that count toward required approvals in repository rulesets.
   - Copilot reviews default to comments only. Submitting real approvals (`APPROVED` state) requires turning on "Allow Copilot to approve pull requests" in repository or organization settings.
-  - Copilot approvals act as positive approvals, while `automerge` LLM reviews and OSV-Scanner act as negative veto filters. Keeping both provides defense in depth:
+  - Copilot approvals act as positive approvals, while `automerge` LLM veto and OSV-Scanner act as negative veto filters. Keeping both provides defense in depth:
     - In a real test ([`kachick/infra-test#1`](https://github.com/kachick/infra-test/pull/1#pullrequestreview-5548352008)), a pull request titled "Add Copyleft license" added an MIT license instead. Copilot noted the difference in its summary table but still recommended approval without flagging a problem.
     - Relying only on positive approvals allows subtle mismatches or prompt injections to pass through. Keeping negative veto filters (`automerge:vetoed`) remains essential.
   - **Billing protection and bot PR limits in personal repositories**:
     - GitHub charges AI credit consumption to the pull request author, not the repository owner. This protects public repositories from billing drains by spam pull requests from forks.
     - Because third-party bots (such as Renovate or Dependabot) do not hold personal Copilot licenses, automatic reviews do not run for bot pull requests in personal repositories.
-    - Therefore, personal repositories cannot rely on Copilot code review for automated bot merges. Running custom LLM review (`llm-veto`) with controlled API keys remains necessary to inspect bot pull requests.
+    - Therefore, personal repositories cannot rely on Copilot code review for automated bot merges. Running custom LLM veto (`llm-veto`) with controlled API keys remains necessary to inspect bot pull requests.
   - **Trap: Do not require approvals (`required_approving_review_count >= 1`) in personal repositories**:
     - Because bot pull requests never receive Copilot reviews, requiring approvals will permanently block unattended merges for Dependabot and Renovate.
     - Keep `required_approving_review_count = 0` in personal repository rulesets to preserve unattended bot automerge.
-- **Why OSV-Scanner runs before LLM review**:
+- **Why OSV-Scanner runs before LLM veto**:
   - `osv-scanner` deterministically compares base and PR trees to catch newly introduced CVEs in lockfiles (`flake.lock`, `go.mod`, `Cargo.lock`, `package-lock.json`, etc.).
   - Running this check first rejects known vulnerabilities immediately without spending LLM API tokens.
 - **Why negative labels are attached on block or veto**:

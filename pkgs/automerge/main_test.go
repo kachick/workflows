@@ -621,6 +621,25 @@ func TestExecuteLLMVeto(t *testing.T) {
 		t.Errorf("expected ensuredLabels to contain %q, got %v", vetoLabelName, runner.ensuredLabels)
 	}
 
+	// 201 should have merge comment with passing LLM veto step
+	if len(runner.comments[201]) != 1 {
+		t.Fatalf("expected 1 comment on PR 201, got %v", runner.comments[201])
+	}
+	if !strings.Contains(runner.comments[201][0], "- :white_check_mark: LLM veto: no risks detected") {
+		t.Errorf("expected PR 201 comment to contain passing LLM veto step, got %q", runner.comments[201][0])
+	}
+
+	// 202 should have veto comment with reason
+	if len(runner.comments[202]) != 1 {
+		t.Fatalf("expected 1 comment on PR 202, got %v", runner.comments[202])
+	}
+	if !strings.Contains(runner.comments[202][0], "Automerge was vetoed by LLM veto: breaking change found in release notes.") {
+		t.Errorf("expected PR 202 comment to contain veto header, got %q", runner.comments[202][0])
+	}
+	if !strings.Contains(runner.comments[202][0], "- :x: LLM veto: breaking change found in release notes") {
+		t.Errorf("expected PR 202 comment to contain veto step, got %q", runner.comments[202][0])
+	}
+
 	// Subsequent runs must skip already vetoed PRs without calling reviewer or spending tokens
 	reviewer.calledOn = nil
 	runner.prs = []PullRequest{
@@ -1753,7 +1772,7 @@ func TestBuildStepSummary(t *testing.T) {
 				Title:  "Vetoed update",
 				Author: "app/renovate",
 				Action: ActionVetoed,
-				Source: SourceLLMReview,
+				Source: SourceLLMVeto,
 				Reason: "suspicious code",
 			},
 			{
@@ -1781,7 +1800,7 @@ func TestBuildStepSummary(t *testing.T) {
 		if !strings.Contains(summary, "| [#2](https://github.com/kachick/workflows/pull/2) Major update | [dependabot[bot]](https://github.com/apps/dependabot) | ⚠️ Blocked | Version bump policy | major update (1.0 -> 2.0) |") {
 			t.Errorf("expected blocked row in summary, got:\n%s", summary)
 		}
-		if !strings.Contains(summary, "| [#3](https://github.com/kachick/workflows/pull/3) Vetoed update | [renovate[bot]](https://github.com/apps/renovate) | 🚫 Vetoed | LLM review | suspicious code |") {
+		if !strings.Contains(summary, "| [#3](https://github.com/kachick/workflows/pull/3) Vetoed update | [renovate[bot]](https://github.com/apps/renovate) | 🚫 Vetoed | LLM veto | suspicious code |") {
 			t.Errorf("expected vetoed row in summary, got:\n%s", summary)
 		}
 		if !strings.Contains(summary, "| [#4](https://github.com/kachick/workflows/pull/4) Pending checks | [samuebot[bot]](https://github.com/apps/samuebot) | ⏭️ Skipped (transient) | CI | status check pending |") {
@@ -1805,7 +1824,7 @@ func TestFormatEvaluationSteps(t *testing.T) {
 		{Name: "All status checks completed successfully", Status: StepPassed, Details: "2/2 checks passed"},
 		{Name: "Version bump policy", Status: StepFailed, Details: "disallowed dependabot bump: major update (1.0 -> 2.0)"},
 		{Name: "Vulnerability scan (OSV-Scanner)", Status: StepSkipped},
-		{Name: "LLM review (Gemini)", Status: StepSkipped},
+		{Name: "LLM veto", Status: StepSkipped},
 		{Name: "Merge PR", Status: StepSkipped},
 	}
 
@@ -1819,7 +1838,7 @@ func TestFormatEvaluationSteps(t *testing.T) {
 		"- :white_check_mark: All status checks completed successfully: 2/2 checks passed",
 		"- :x: Version bump policy: disallowed dependabot bump: major update (1.0 -> 2.0)",
 		"- :white_large_square: Vulnerability scan (OSV-Scanner)",
-		"- :white_large_square: LLM review (Gemini)",
+		"- :white_large_square: LLM veto",
 		"- :white_large_square: Merge PR",
 	}
 
