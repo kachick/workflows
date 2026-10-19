@@ -125,18 +125,32 @@ func run() error {
 		return fmt.Errorf("failed to compute closure diffs: %w", err)
 	}
 
-	var vulns []osv.PackageVulnerabilities
+	var vulnRes report.VulnerabilityResult
 	if checkVulns {
-		var allPkgs []osv.Package
-		seenPkgs := make(map[string]bool)
+		vulnRes.Checked = true
+		var beforePkgs []osv.Package
+		var afterPkgs []osv.Package
+		seenBefore := make(map[string]bool)
+		seenAfter := make(map[string]bool)
+
 		for _, res := range results {
 			if res.DiffText != "" {
-				pkgs := diff.ExtractUpdatedPackages(res.DiffText)
-				for _, p := range pkgs {
+				bPkgs, aPkgs := diff.ExtractPackageChanges(res.DiffText)
+				for _, p := range bPkgs {
 					key := p.Name + "@" + p.Version
-					if !seenPkgs[key] {
-						seenPkgs[key] = true
-						allPkgs = append(allPkgs, osv.Package{
+					if !seenBefore[key] {
+						seenBefore[key] = true
+						beforePkgs = append(beforePkgs, osv.Package{
+							Name:    p.Name,
+							Version: p.Version,
+						})
+					}
+				}
+				for _, p := range aPkgs {
+					key := p.Name + "@" + p.Version
+					if !seenAfter[key] {
+						seenAfter[key] = true
+						afterPkgs = append(afterPkgs, osv.Package{
 							Name:    p.Name,
 							Version: p.Version,
 						})
@@ -145,13 +159,73 @@ func run() error {
 			}
 		}
 
-		if len(allPkgs) > 0 {
+		allQueryPkgs := make([]osv.Package, 0, len(beforePkgs)+len(afterPkgs))
+		seenQuery := make(map[string]bool)
+		for _, p := range append(beforePkgs, afterPkgs...) {
+			key := p.Name + "@" + p.Version
+			if !seenQuery[key] {
+				seenQuery[key] = true
+				allQueryPkgs = append(allQueryPkgs, p)
+			}
+		}
+
+		if len(allQueryPkgs) > 0 {
 			osvClient := osv.NewClient(osvEndpoint)
-			v, err := osvClient.QueryBatch(ctx, allPkgs)
+			batchResults, err := osvClient.QueryBatch(ctx, allQueryPkgs)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to query OSV API: %v\n", err)
 			} else {
-				vulns = v
+				pkgVulns := make(map[string][]osv.Vulnerability)
+				for _, pv := range batchResults {
+					key := pv.Package.Name + "@" + pv.Package.Version
+					pkgVulns[key] = pv.Vulnerabilities
+				}
+
+				beforeVulnsByPkg := make(map[string]map[string]bool)
+				for _, bp := range beforePkgs {
+					key := bp.Name + "@" + bp.Version
+					if vList, ok := pkgVulns[key]; ok {
+						if beforeVulnsByPkg[bp.Name] == nil {
+							beforeVulnsByPkg[bp.Name] = make(map[string]bool)
+						}
+						for _, v := range vList {
+							beforeVulnsByPkg[bp.Name][v.ID] = true
+						}
+					}
+				}
+
+				for _, ap := range afterPkgs {
+					key := ap.Name + "@" + ap.Version
+					vList, ok := pkgVulns[key]
+					if !ok || len(vList) == 0 {
+						continue
+					}
+
+					var newlyIntroduced []osv.Vulnerability
+					var alreadyPresent []osv.Vulnerability
+					beforeSet := beforeVulnsByPkg[ap.Name]
+
+					for _, v := range vList {
+						if beforeSet != nil && beforeSet[v.ID] {
+							alreadyPresent = append(alreadyPresent, v)
+						} else {
+							newlyIntroduced = append(newlyIntroduced, v)
+						}
+					}
+
+					if len(newlyIntroduced) > 0 {
+						vulnRes.NewVulns = append(vulnRes.NewVulns, osv.PackageVulnerabilities{
+							Package:         ap,
+							Vulnerabilities: newlyIntroduced,
+						})
+					}
+					if len(alreadyPresent) > 0 {
+						vulnRes.ExistingVulns = append(vulnRes.ExistingVulns, osv.PackageVulnerabilities{
+							Package:         ap,
+							Vulnerabilities: alreadyPresent,
+						})
+					}
+				}
 			}
 		}
 	}
@@ -159,7 +233,7 @@ func run() error {
 	meta := workflowmeta.Get()
 	isCI := os.Getenv("GITHUB_ACTIONS") == "true"
 
-	rep, err := report.Build(results, vulns, maxSize, headSize, meta, isCI)
+	rep, err := report.Build(results, vulnRes, maxSize, headSize, meta, isCI)
 	if err != nil {
 		return fmt.Errorf("failed to build report: %w", err)
 	}
@@ -184,11 +258,15 @@ func run() error {
 
 	writeGHAOutput("has_diff", strconv.FormatBool(rep.HasDiff))
 	writeGHAOutput("is_truncated", strconv.FormatBool(rep.IsTruncated))
-	writeGHAOutput("has_vulnerabilities", strconv.FormatBool(len(vulns) > 0))
-	writeGHAOutput("vulnerabilities_count", strconv.Itoa(len(vulns)))
+	writeGHAOutput("has_vulnerabilities", strconv.FormatBool(len(rep.Vulnerabilities) > 0))
+	writeGHAOutput("vulnerabilities_count", strconv.Itoa(len(rep.Vulnerabilities)))
 
 	if stepSummaryOut && rep.HasDiff {
-		writeStepSummary(rep.CommentMarkdown)
+		writeStepSummary(rep.StepSummaryMarkdown)
+	}
+
+	if checkVulns {
+		fmt.Printf("Vulnerability scan: %d newly introduced vulnerability package(s), %d pre-existing vulnerability package(s)\n", len(rep.Vulnerabilities), len(rep.ExistingVulnerabilities))
 	}
 
 	if !rep.HasDiff {
@@ -237,8 +315,8 @@ func run() error {
 		fmt.Printf("Successfully posted diff comment to PR #%d\n", prNumber)
 	}
 
-	if failOnVuln && len(vulns) > 0 {
-		return fmt.Errorf("detected %d package(s) with known vulnerabilities in closure diff", len(vulns))
+	if failOnVuln && len(rep.Vulnerabilities) > 0 {
+		return fmt.Errorf("detected %d package(s) with newly introduced vulnerabilities in closure diff", len(rep.Vulnerabilities))
 	}
 
 	return nil

@@ -68,3 +68,37 @@ libfoo: 1.2 → 1.3, 1.4
 		})
 	}
 }
+
+func TestExtractPackageChanges(t *testing.T) {
+	diffText := `
+acpi-call: 2020-04-07-5.8.16 → 2020-04-07-5.8.18
+bluez-qt: +12.6 KiB
+kdeconnect: 20.08.2 → ∅, -6597.8 KiB
+kdeconnect-kde: ∅ → 20.08.2, +6599.7 KiB
+nix: 2.31.5.drv, 2.34.8.drv → 2.31.6.drv, 2.34.9.drv
+rfcpg2ryywgma7wlswjzna99g9gq8laq: ε → ∅, -199.8 MiB
+zod: 3.22.0 -> 3.22.4, +5.0 KiB
+`
+	expectedBefore := []Package{
+		{Name: "acpi-call", Version: "2020-04-07-5.8.16"},
+		{Name: "kdeconnect", Version: "20.08.2"},
+		{Name: "nix", Version: "2.31.5.drv"},
+		{Name: "nix", Version: "2.34.8.drv"},
+		{Name: "zod", Version: "3.22.0"},
+	}
+	expectedAfter := []Package{
+		{Name: "acpi-call", Version: "2020-04-07-5.8.18"},
+		{Name: "kdeconnect-kde", Version: "20.08.2"},
+		{Name: "nix", Version: "2.31.6.drv"},
+		{Name: "nix", Version: "2.34.9.drv"},
+		{Name: "zod", Version: "3.22.4"},
+	}
+
+	before, after := ExtractPackageChanges(diffText)
+	if !reflect.DeepEqual(before, expectedBefore) {
+		t.Fatalf("before mismatch:\nexpected: %#v\ngot:      %#v", expectedBefore, before)
+	}
+	if !reflect.DeepEqual(after, expectedAfter) {
+		t.Fatalf("after mismatch:\nexpected: %#v\ngot:      %#v", expectedAfter, after)
+	}
+}

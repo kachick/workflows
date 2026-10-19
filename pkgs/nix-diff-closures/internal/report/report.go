@@ -31,17 +31,26 @@ type TargetResult struct {
 	Error    string
 }
 
+// VulnerabilityResult contains newly introduced and pre-existing vulnerabilities detected by OSV.
+type VulnerabilityResult struct {
+	Checked       bool
+	NewVulns      []osv.PackageVulnerabilities
+	ExistingVulns []osv.PackageVulnerabilities
+}
+
 // Report holds the formatted output and diff metadata.
 type Report struct {
-	CommentMarkdown string
-	FullDiffText    string
-	HasDiff         bool
-	IsTruncated     bool
-	Vulnerabilities []osv.PackageVulnerabilities
+	CommentMarkdown         string
+	StepSummaryMarkdown     string
+	FullDiffText            string
+	HasDiff                 bool
+	IsTruncated             bool
+	Vulnerabilities         []osv.PackageVulnerabilities // newly introduced (for backward compatibility)
+	ExistingVulnerabilities []osv.PackageVulnerabilities
 }
 
 // Build generates the comment markdown and full diff text from target results and detected vulnerabilities.
-func Build(results []TargetResult, vulns []osv.PackageVulnerabilities, maxSize int, headSize int, meta workflowmeta.Metadata, isCI bool) (Report, error) {
+func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headSize int, meta workflowmeta.Metadata, isCI bool) (Report, error) {
 	if maxSize <= 0 {
 		maxSize = DefaultMaxSize
 	}
@@ -72,10 +81,11 @@ func Build(results []TargetResult, vulns []osv.PackageVulnerabilities, maxSize i
 	fullDiff := fullDiffBuilder.String()
 	if !hasAnyDiff {
 		return Report{
-			CommentMarkdown: "",
-			FullDiffText:    "",
-			HasDiff:         false,
-			IsTruncated:     false,
+			CommentMarkdown:     "",
+			StepSummaryMarkdown: "",
+			FullDiffText:        "",
+			HasDiff:             false,
+			IsTruncated:         false,
 		}, nil
 	}
 
@@ -88,11 +98,11 @@ func Build(results []TargetResult, vulns []osv.PackageVulnerabilities, maxSize i
 		md.WriteString(headerText + "\n\n")
 	}
 
-	if len(vulns) > 0 {
+	if len(vulns.NewVulns) > 0 {
 		md.WriteString("> [!CAUTION]\n")
-		md.WriteString("> **Known Vulnerabilities Detected in Updated Closure**\n>\n")
-		md.WriteString("> The following updated packages contain known vulnerabilities in the OSV database:\n")
-		for _, pv := range vulns {
+		md.WriteString("> **Newly Introduced Vulnerabilities Detected in Updated Closure**\n>\n")
+		md.WriteString("> The following updated packages introduce new known vulnerabilities from the OSV database:\n")
+		for _, pv := range vulns.NewVulns {
 			var ids []string
 			for _, v := range pv.Vulnerabilities {
 				escapedID := html.EscapeString(v.ID)
@@ -100,11 +110,24 @@ func Build(results []TargetResult, vulns []osv.PackageVulnerabilities, maxSize i
 			}
 			md.WriteString(fmt.Sprintf("> - **%s** (`%s`): %s\n", html.EscapeString(pv.Package.Name), html.EscapeString(pv.Package.Version), strings.Join(ids, ", ")))
 		}
-		md.WriteString(">\n> *Note: This check fails intentionally when known vulnerabilities are detected, preventing automated merges (automerge) from introducing them without human review.*\n\n")
+		md.WriteString(">\n> *Note: This check fails intentionally when new vulnerabilities are detected, preventing automated merges (automerge) from introducing them without human review.*\n\n")
 	}
 
-	if isTruncated {
-		artifactURL := fmt.Sprintf("%s#artifacts", meta.RunURL())
+	artifactURL := fmt.Sprintf("%s#artifacts", meta.RunURL())
+	if vulns.Checked && len(vulns.NewVulns) == 0 {
+		md.WriteString("> [!NOTE]\n")
+		md.WriteString("> **Vulnerability Scan**: No newly introduced vulnerabilities detected in updated closure.\n")
+		if isTruncated {
+			md.WriteString(">\n")
+			md.WriteString(fmt.Sprintf("> The diff output is large (%d bytes) and has been truncated to fit GitHub comment size limits.\n", len(fullDiff)))
+			if meta.ServerURL != "" && meta.Repository != "" && meta.RunID != "" {
+				md.WriteString(fmt.Sprintf("> You can view the full diff in the [Job Artifacts](%s).\n", artifactURL))
+			} else {
+				md.WriteString("> You can view the full diff in the Job Artifacts.\n")
+			}
+		}
+		md.WriteString("\n")
+	} else if isTruncated {
 		md.WriteString("> [!NOTE]\n")
 		md.WriteString(fmt.Sprintf("> The diff output is large (%d bytes) and has been truncated to fit GitHub comment size limits.\n", len(fullDiff)))
 		if meta.ServerURL != "" && meta.Repository != "" && meta.RunID != "" {
@@ -150,12 +173,33 @@ func Build(results []TargetResult, vulns []osv.PackageVulnerabilities, maxSize i
 		md.WriteString("</details>\n\n")
 	}
 
+	commentMarkdown := md.String()
+	var summary strings.Builder
+	summary.WriteString(commentMarkdown)
+
+	if len(vulns.ExistingVulns) > 0 {
+		summary.WriteString("<details>\n")
+		summary.WriteString("<summary><b>Existing vulnerabilities in updated packages (already present in base closure)</b></summary>\n\n")
+		summary.WriteString("The following updated packages contain known vulnerabilities that were already present before this update:\n")
+		for _, pv := range vulns.ExistingVulns {
+			var ids []string
+			for _, v := range pv.Vulnerabilities {
+				escapedID := html.EscapeString(v.ID)
+				ids = append(ids, fmt.Sprintf("[%s](https://osv.dev/vulnerability/%s)", escapedID, url.PathEscape(v.ID)))
+			}
+			summary.WriteString(fmt.Sprintf("- **%s** (`%s`): %s\n", html.EscapeString(pv.Package.Name), html.EscapeString(pv.Package.Version), strings.Join(ids, ", ")))
+		}
+		summary.WriteString("\n</details>\n\n")
+	}
+
 	return Report{
-		CommentMarkdown: md.String(),
-		FullDiffText:    fullDiff,
-		HasDiff:         true,
-		IsTruncated:     isTruncated,
-		Vulnerabilities: vulns,
+		CommentMarkdown:         commentMarkdown,
+		StepSummaryMarkdown:     summary.String(),
+		FullDiffText:            fullDiff,
+		HasDiff:                 true,
+		IsTruncated:             isTruncated,
+		Vulnerabilities:         vulns.NewVulns,
+		ExistingVulnerabilities: vulns.ExistingVulns,
 	}, nil
 }
 

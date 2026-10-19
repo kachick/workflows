@@ -76,7 +76,7 @@ func TestBuildReport(t *testing.T) {
 			},
 		}
 
-		rep, err := Build(results, nil, 1000, 500, completeMeta, true)
+		rep, err := Build(results, VulnerabilityResult{}, 1000, 500, completeMeta, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -97,7 +97,7 @@ func TestBuildReport(t *testing.T) {
 			},
 		}
 
-		rep, err := Build(results, nil, 1000, 500, completeMeta, true)
+		rep, err := Build(results, VulnerabilityResult{}, 1000, 500, completeMeta, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -133,7 +133,7 @@ func TestBuildReport(t *testing.T) {
 
 		maxSize := 100
 		headSize := 50
-		rep, err := Build(results, nil, maxSize, headSize, completeMeta, true)
+		rep, err := Build(results, VulnerabilityResult{}, maxSize, headSize, completeMeta, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -162,7 +162,7 @@ func TestBuildReport(t *testing.T) {
 			},
 		}
 
-		_, err := Build(results, nil, 1000, 500, incomplete, true)
+		_, err := Build(results, VulnerabilityResult{}, 1000, 500, incomplete, true)
 		if err == nil {
 			t.Fatal("expected error when workflow metadata is incomplete in CI, got nil")
 		}
@@ -177,7 +177,7 @@ func TestBuildReport(t *testing.T) {
 			},
 		}
 
-		rep, err := Build(results, nil, 1000, 500, incomplete, false)
+		rep, err := Build(results, VulnerabilityResult{}, 1000, 500, incomplete, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -187,23 +187,26 @@ func TestBuildReport(t *testing.T) {
 		}
 	})
 
-	t.Run("formats detected vulnerabilities with caution alert", func(t *testing.T) {
+	t.Run("formats newly detected vulnerabilities with caution alert", func(t *testing.T) {
 		results := []TargetResult{
 			{
 				Target:   "devShells.x86_64-linux.default",
 				DiffText: "zod: 3.22.0 → 3.22.4\n",
 			},
 		}
-		vulns := []osv.PackageVulnerabilities{
-			{
-				Package: osv.Package{Name: "zod", Version: "3.22.4"},
-				Vulnerabilities: []osv.Vulnerability{
-					{ID: "GHSA-m95q-7qp3-xv42"},
+		vulnRes := VulnerabilityResult{
+			Checked: true,
+			NewVulns: []osv.PackageVulnerabilities{
+				{
+					Package: osv.Package{Name: "zod", Version: "3.22.4"},
+					Vulnerabilities: []osv.Vulnerability{
+						{ID: "GHSA-m95q-7qp3-xv42"},
+					},
 				},
 			},
 		}
 
-		rep, err := Build(results, vulns, 1000, 500, completeMeta, true)
+		rep, err := Build(results, vulnRes, 1000, 500, completeMeta, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -213,11 +216,64 @@ func TestBuildReport(t *testing.T) {
 		if !strings.Contains(rep.CommentMarkdown, "> [!CAUTION]") {
 			t.Fatal("expected caution alert in comment markdown")
 		}
+		if !strings.Contains(rep.CommentMarkdown, "**Newly Introduced Vulnerabilities Detected in Updated Closure**") {
+			t.Fatal("expected newly introduced heading in caution alert")
+		}
 		if !strings.Contains(rep.CommentMarkdown, "[GHSA-m95q-7qp3-xv42](https://osv.dev/vulnerability/GHSA-m95q-7qp3-xv42)") {
 			t.Fatalf("expected linked vulnerability ID in markdown, got:\n%s", rep.CommentMarkdown)
 		}
 		if !strings.Contains(rep.CommentMarkdown, "fails intentionally") {
 			t.Fatal("expected explanation note that check fails intentionally")
+		}
+	})
+
+	t.Run("formats no newly introduced vulnerabilities with note alert", func(t *testing.T) {
+		results := []TargetResult{
+			{
+				Target:   "devShells.x86_64-linux.default",
+				DiffText: "nix: 2.31.5.drv → 2.31.6.drv\n",
+			},
+		}
+		vulnRes := VulnerabilityResult{
+			Checked:  true,
+			NewVulns: nil,
+			ExistingVulns: []osv.PackageVulnerabilities{
+				{
+					Package: osv.Package{Name: "nix", Version: "2.31.6.drv"},
+					Vulnerabilities: []osv.Vulnerability{
+						{ID: "DEBIAN-CVE-2024-27297"},
+					},
+				},
+			},
+		}
+
+		rep, err := Build(results, vulnRes, 1000, 500, completeMeta, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rep.Vulnerabilities) != 0 {
+			t.Fatalf("expected 0 new vulnerability results, got %d", len(rep.Vulnerabilities))
+		}
+		if len(rep.ExistingVulnerabilities) != 1 {
+			t.Fatalf("expected 1 existing vulnerability result, got %d", len(rep.ExistingVulnerabilities))
+		}
+		if strings.Contains(rep.CommentMarkdown, "> [!CAUTION]") {
+			t.Fatal("unexpected caution alert when no new vulnerabilities introduced")
+		}
+		expectedNote := "> **Vulnerability Scan**: No newly introduced vulnerabilities detected in updated closure."
+		if !strings.Contains(rep.CommentMarkdown, expectedNote) {
+			t.Fatalf("expected note %q in comment markdown, got:\n%s", expectedNote, rep.CommentMarkdown)
+		}
+		// CommentMarkdown should NOT show existing vulnerabilities details
+		if strings.Contains(rep.CommentMarkdown, "DEBIAN-CVE-2024-27297") {
+			t.Fatal("comment markdown should not list pre-existing vulnerabilities")
+		}
+		// StepSummaryMarkdown SHOULD show existing vulnerabilities details
+		if !strings.Contains(rep.StepSummaryMarkdown, "DEBIAN-CVE-2024-27297") {
+			t.Fatalf("step summary markdown should list pre-existing vulnerabilities, got:\n%s", rep.StepSummaryMarkdown)
+		}
+		if !strings.Contains(rep.StepSummaryMarkdown, "Existing vulnerabilities in updated packages (already present in base closure)") {
+			t.Fatal("expected existing vulnerabilities details header in step summary")
 		}
 	})
 
@@ -233,7 +289,7 @@ func TestBuildReport(t *testing.T) {
 			},
 		}
 
-		rep, err := Build(results, nil, 1000, 500, completeMeta, true)
+		rep, err := Build(results, VulnerabilityResult{}, 1000, 500, completeMeta, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

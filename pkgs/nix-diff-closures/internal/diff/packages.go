@@ -10,13 +10,13 @@ type Package struct {
 	Version string
 }
 
-// ExtractUpdatedPackages parses normalized nix store diff-closures text and
-// returns the list of packages that were updated or added to a new version.
+// ExtractPackageChanges parses normalized nix store diff-closures text and
+// returns the lists of packages before and after the update.
 //
-// Packages with only size changes, deletions (-> ∅), or missing versions (ε) are ignored.
-func ExtractUpdatedPackages(diffText string) []Package {
-	var pkgs []Package
-	seen := make(map[string]bool)
+// Packages with only size changes, deletions (-> ∅), or missing versions (ε) are handled appropriately.
+func ExtractPackageChanges(diffText string) (before []Package, after []Package) {
+	seenBefore := make(map[string]bool)
+	seenAfter := make(map[string]bool)
 
 	lines := strings.Split(diffText, "\n")
 	for _, line := range lines {
@@ -45,36 +45,25 @@ func ExtractUpdatedPackages(diffText string) []Package {
 			continue
 		}
 
+		beforePart := strings.TrimSpace(rest[:arrowIdx])
 		afterPart := strings.TrimSpace(rest[arrowIdx+arrowLen:])
 
-		// Strip trailing size diff (e.g. ", +13.9 KiB" or ", -5.0 KiB")
-		tokens := strings.Split(afterPart, ",")
-		var rawVersions []string
-		for _, token := range tokens {
-			t := strings.TrimSpace(token)
-			if t == "" || t == "∅" || t == "ε" {
-				continue
-			}
-			// Size diffs start with '+' or '-' and end with 'B' (e.g. "+13.9 KiB", "-6597.8 KiB")
-			if (strings.HasPrefix(t, "+") || strings.HasPrefix(t, "-")) && strings.HasSuffix(t, "B") {
-				continue
-			}
-			rawVersions = append(rawVersions, t)
-		}
-
-		if len(rawVersions) == 0 {
-			continue
-		}
-		for _, rawVer := range rawVersions {
-			v := strings.TrimSpace(rawVer)
-			if v == "" || v == "∅" || v == "ε" {
-				continue
-			}
-
+		for _, v := range parseVersions(beforePart) {
 			key := pkgName + "@" + v
-			if !seen[key] {
-				seen[key] = true
-				pkgs = append(pkgs, Package{
+			if !seenBefore[key] {
+				seenBefore[key] = true
+				before = append(before, Package{
+					Name:    pkgName,
+					Version: v,
+				})
+			}
+		}
+
+		for _, v := range parseVersions(afterPart) {
+			key := pkgName + "@" + v
+			if !seenAfter[key] {
+				seenAfter[key] = true
+				after = append(after, Package{
 					Name:    pkgName,
 					Version: v,
 				})
@@ -82,5 +71,31 @@ func ExtractUpdatedPackages(diffText string) []Package {
 		}
 	}
 
-	return pkgs
+	return before, after
+}
+
+// ExtractUpdatedPackages parses normalized nix store diff-closures text and
+// returns the list of packages that were updated or added to a new version.
+//
+// Packages with only size changes, deletions (-> ∅), or missing versions (ε) are ignored.
+func ExtractUpdatedPackages(diffText string) []Package {
+	_, after := ExtractPackageChanges(diffText)
+	return after
+}
+
+func parseVersions(part string) []string {
+	tokens := strings.Split(part, ",")
+	var rawVersions []string
+	for _, token := range tokens {
+		t := strings.TrimSpace(token)
+		if t == "" || t == "∅" || t == "ε" {
+			continue
+		}
+		// Size diffs start with '+' or '-' and end with 'B' (e.g. "+13.9 KiB", "-6597.8 KiB")
+		if (strings.HasPrefix(t, "+") || strings.HasPrefix(t, "-")) && strings.HasSuffix(t, "B") {
+			continue
+		}
+		rawVersions = append(rawVersions, t)
+	}
+	return rawVersions
 }
