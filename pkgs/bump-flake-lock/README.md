@@ -16,7 +16,8 @@ permissions:
 
 on:
   schedule:
-    - cron: '17 1 * * 1'
+    # Run once a month on the 1st with distributed hour and minute
+    - cron: '17 3 1 * *'
   workflow_dispatch:
 
 jobs:
@@ -29,6 +30,21 @@ jobs:
       post-commit-lock-file-title: 'Sync CI dependencies with nixpkgs'
     secrets:
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+```
+
+### Tips: Distribute Schedules Across Repositories
+
+When running `bump-flake-lock` across multiple repositories, running them on the 1st of every month keeps your local Nix store size consistent (shared inputs). Distribute the minute (0-59) and hour (0-5) across repositories so GitHub App API rate limits and runner contention are avoided:
+
+```console
+# Calculate deterministic minute (0-59) and hour (0-5) using Ruby
+ruby -e '
+  require "zlib"
+  crc = Zlib.crc32("kachick/workflows")
+  min = crc % 60
+  hour = (crc / 60) % 6
+  puts "#{min} #{hour} 1 * *"
+'
 ```
 
 ### CLI

@@ -5,9 +5,9 @@ permissions:
 
 on:
   schedule:
-    # Every 10:17(JST) on Monday
-    # https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule
-    - cron: '17 1 * * 1'
+    # 1st of every month at 05:29 UTC (14:29 JST)
+    # Minute and hour are distributed across repositories using CRC32
+    - cron: '29 5 1 * *'
   workflow_dispatch:
 
 jobs:
