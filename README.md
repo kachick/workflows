@@ -27,9 +27,7 @@ Personal collection of reusable GitHub Actions workflows.
 
 When `automerge` skips a pull request due to risk detection or policy blocks, it attaches a negative label for human inspection. Filter these pull requests across repositories:
 
-- [Vetoed pull requests (`label:automerge:vetoed`)](https://github.com/pulls?q=is%3Apr+is%3Aopen+user%3Akachick+label%3Aautomerge%3Avetoed): Flagged by LLM veto or vulnerability scan (remove label to run automerge again after fixes)
-- [Blocked pull requests (`label:automerge:blocked`)](https://github.com/pulls?q=is%3Apr+is%3Aopen+user%3Akachick+label%3Aautomerge%3Ablocked): Held by version bump policy (e.g. major updates)
-- [All pull requests requiring review](https://github.com/pulls?q=is%3Apr+is%3Aopen+user%3Akachick+label%3Aautomerge%3Avetoed%2Cautomerge%3Ablocked): Combined view of vetoed and blocked pull requests
+- [All pull requests requiring human review](https://github.com/pulls?q=is%3Apr+is%3Aopen+user%3Akachick+label%3Aautomerge%3Avetoed%2Cautomerge%3Ablocked): Combined view of vetoed and blocked pull requests
 
 ## Repository Layout
 
