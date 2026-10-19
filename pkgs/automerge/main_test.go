@@ -422,15 +422,15 @@ func (m *mockRunner) MergePR(ctx context.Context, number int, method string) err
 	return nil
 }
 
-func (m *mockRunner) CommentPR(ctx context.Context, number int, body string) error {
+func (m *mockRunner) CommentPR(ctx context.Context, number int, body string) (string, error) {
 	if err, ok := m.commentErrOn[number]; ok {
-		return err
+		return "", err
 	}
 	if m.comments == nil {
 		m.comments = make(map[int][]string)
 	}
 	m.comments[number] = append(m.comments[number], body)
-	return nil
+	return fmt.Sprintf("https://github.com/kachick/workflows/pull/%d#issuecomment-%d", number, len(m.comments[number])), nil
 }
 
 type mockReviewer struct {
@@ -1752,28 +1752,31 @@ func TestBuildStepSummary(t *testing.T) {
 	t.Run("formats rows correctly with links and escaped characters", func(t *testing.T) {
 		results := []PRSummaryResult{
 			{
-				Number: 1,
-				Title:  "Update foo | bar",
-				Author: "renovate[bot]",
-				Action: ActionMerged,
-				Source: SourceMerge,
-				Reason: "merged successfully",
+				Number:     1,
+				Title:      "Update foo | bar",
+				Author:     "renovate[bot]",
+				Action:     ActionMerged,
+				Source:     SourceMerge,
+				Reason:     "merged successfully",
+				CommentURL: "https://github.com/kachick/workflows/pull/1#issuecomment-11111",
 			},
 			{
-				Number: 2,
-				Title:  "Major update",
-				Author: "dependabot[bot]",
-				Action: ActionBlocked,
-				Source: SourceVersionBump,
-				Reason: "major update (1.0 -> 2.0)",
+				Number:     2,
+				Title:      "Major update",
+				Author:     "dependabot[bot]",
+				Action:     ActionBlocked,
+				Source:     SourceVersionBump,
+				Reason:     "major update (1.0 -> 2.0)",
+				CommentURL: "https://github.com/kachick/workflows/pull/2#issuecomment-22222",
 			},
 			{
-				Number: 3,
-				Title:  "Vetoed update",
-				Author: "app/renovate",
-				Action: ActionVetoed,
-				Source: SourceLLMVeto,
-				Reason: "suspicious code",
+				Number:     3,
+				Title:      "Vetoed update",
+				Author:     "app/renovate",
+				Action:     ActionVetoed,
+				Source:     SourceLLMVeto,
+				Reason:     "suspicious code",
+				CommentURL: "https://github.com/kachick/workflows/pull/3#issuecomment-33333",
 			},
 			{
 				Number: 4,
@@ -1794,14 +1797,14 @@ func TestBuildStepSummary(t *testing.T) {
 		}
 
 		summary := buildStepSummary(results, meta)
-		if !strings.Contains(summary, "| [#1](https://github.com/kachick/workflows/pull/1) Update foo \\| bar | [renovate[bot]](https://github.com/apps/renovate) | ✅ Merged | Merge | merged successfully |") {
-			t.Errorf("expected merged row in summary, got:\n%s", summary)
+		if !strings.Contains(summary, "| [#1](https://github.com/kachick/workflows/pull/1#issuecomment-11111) Update foo \\| bar | [renovate[bot]](https://github.com/apps/renovate) | ✅ Merged | Merge | merged successfully |") {
+			t.Errorf("expected merged row with comment link in summary, got:\n%s", summary)
 		}
-		if !strings.Contains(summary, "| [#2](https://github.com/kachick/workflows/pull/2) Major update | [dependabot[bot]](https://github.com/apps/dependabot) | ⚠️ Blocked | Version bump policy | major update (1.0 -> 2.0) |") {
-			t.Errorf("expected blocked row in summary, got:\n%s", summary)
+		if !strings.Contains(summary, "| [#2](https://github.com/kachick/workflows/pull/2#issuecomment-22222) Major update | [dependabot[bot]](https://github.com/apps/dependabot) | ⚠️ Blocked | Version bump policy | major update (1.0 -> 2.0) |") {
+			t.Errorf("expected blocked row with comment link in summary, got:\n%s", summary)
 		}
-		if !strings.Contains(summary, "| [#3](https://github.com/kachick/workflows/pull/3) Vetoed update | [renovate[bot]](https://github.com/apps/renovate) | 🚫 Vetoed | LLM veto | suspicious code |") {
-			t.Errorf("expected vetoed row in summary, got:\n%s", summary)
+		if !strings.Contains(summary, "| [#3](https://github.com/kachick/workflows/pull/3#issuecomment-33333) Vetoed update | [renovate[bot]](https://github.com/apps/renovate) | 🚫 Vetoed | LLM veto | suspicious code |") {
+			t.Errorf("expected vetoed row with comment link in summary, got:\n%s", summary)
 		}
 		if !strings.Contains(summary, "| [#4](https://github.com/kachick/workflows/pull/4) Pending checks | [samuebot[bot]](https://github.com/apps/samuebot) | ⏭️ Skipped (transient) | CI | status check pending |") {
 			t.Errorf("expected skipped row in summary, got:\n%s", summary)
@@ -1919,6 +1922,9 @@ func TestExecuteWritesStepSummary(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "✅ Merged") {
 		t.Errorf("expected merged icon in summary, got: %s", string(content))
+	}
+	if !strings.Contains(string(content), "[#701](https://github.com/kachick/workflows/pull/701#issuecomment-1)") {
+		t.Errorf("expected comment link in summary, got: %s", string(content))
 	}
 }
 

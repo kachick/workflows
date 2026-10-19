@@ -92,12 +92,13 @@ type EvaluationStep struct {
 }
 
 type PRSummaryResult struct {
-	Number int
-	Title  string
-	Author string
-	Action PRAction
-	Source PRSource
-	Reason string
+	Number     int
+	Title      string
+	Author     string
+	Action     PRAction
+	Source     PRSource
+	Reason     string
+	CommentURL string
 }
 
 type EligibilityResult struct {
@@ -149,7 +150,7 @@ type CommandRunner interface {
 	EnsureLabel(ctx context.Context, name, description, color string) error
 	AddLabelToPR(ctx context.Context, number int, label string) error
 	MergePR(ctx context.Context, number int, method string) error
-	CommentPR(ctx context.Context, number int, body string) error
+	CommentPR(ctx context.Context, number int, body string) (string, error)
 }
 
 type DefaultCommandRunner struct{}
@@ -239,13 +240,17 @@ func (r *DefaultCommandRunner) MergePR(ctx context.Context, number int, method s
 	return cmd.Run()
 }
 
-func (r *DefaultCommandRunner) CommentPR(ctx context.Context, number int, body string) error {
+func (r *DefaultCommandRunner) CommentPR(ctx context.Context, number int, body string) (string, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "comment", strconv.Itoa(number),
 		"--body", body,
 	)
-	cmd.Stdout = os.Stdout
+	var stdout bytes.Buffer
+	cmd.Stdout = io.MultiWriter(os.Stdout, &stdout)
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 func parseAllowedBots(input string) []string {
@@ -1477,9 +1482,16 @@ func buildStepSummary(results []PRSummaryResult, meta workflowmeta.Metadata) str
 		cleanTitle := strings.ReplaceAll(r.Title, "|", `\|`)
 		cleanTitle = strings.ReplaceAll(cleanTitle, "\n", " ")
 
+		// Prefer the exact comment URL posted in this run when available.
+		// Fall back to the pull request URL when no comment was posted (such as transient skips or repeated runs).
+		targetURL := r.CommentURL
+		if targetURL == "" && meta.ServerURL != "" && meta.Repository != "" {
+			targetURL = fmt.Sprintf("%s/%s/pull/%d", meta.ServerURL, meta.Repository, r.Number)
+		}
+
 		var prLink string
-		if meta.ServerURL != "" && meta.Repository != "" {
-			prLink = fmt.Sprintf("[#%d](%s/%s/pull/%d) %s", r.Number, meta.ServerURL, meta.Repository, r.Number, cleanTitle)
+		if targetURL != "" {
+			prLink = fmt.Sprintf("[#%d](%s) %s", r.Number, targetURL, cleanTitle)
 		} else {
 			prLink = fmt.Sprintf("#%d %s", r.Number, cleanTitle)
 		}
@@ -1575,6 +1587,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 				// Why not label transient skips (CI pending/failure, conflicts):
 				// Transient skips usually resolve with subsequent pushes or CI retries.
 				// Label only policy blocks (e.g. major bumps) so humans can filter PRs that need review.
+				var commentURL string
 				if !hasLabel(pr, blockedLabelName) {
 					if err := runner.EnsureLabel(ctx, blockedLabelName, blockedLabelDescription, blockedLabelColor); err != nil {
 						fmt.Printf("Warning: failed to ensure label %q: %v\n", blockedLabelName, err)
@@ -1587,17 +1600,20 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					fullSteps := completeSkippedSteps(res.Steps, cfg)
 					commentBody := fmt.Sprintf("Automerge was skipped because %s. Marking with `%s` for manual review.\n\n%s\n%s",
 						res.Reason, blockedLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
-					if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
+					var err error
+					commentURL, err = runner.CommentPR(ctx, pr.Number, commentBody)
+					if err != nil {
 						fmt.Printf("Warning: failed to comment on blocked PR #%d: %v\n", pr.Number, err)
 					}
 				}
 				summaries = append(summaries, PRSummaryResult{
-					Number: pr.Number,
-					Title:  pr.Title,
-					Author: pr.Author.Login,
-					Action: ActionBlocked,
-					Source: res.Source,
-					Reason: res.Reason,
+					Number:     pr.Number,
+					Title:      pr.Title,
+					Author:     pr.Author.Login,
+					Action:     ActionBlocked,
+					Source:     res.Source,
+					Reason:     res.Reason,
+					CommentURL: commentURL,
 				})
 			} else {
 				summaries = append(summaries, PRSummaryResult{
@@ -1654,6 +1670,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 
 			if veto {
 				fmt.Printf("PR #%d (%s): VETOED by vulnerability scan: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
+				var commentURL string
 				if !hasLabel(pr, vetoLabelName) {
 					if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
 						fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
@@ -1669,17 +1686,20 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					fullSteps := completeSkippedSteps(vetoSteps, cfg)
 					commentBody := fmt.Sprintf("Automerge was vetoed by vulnerability scan: %s. Marking with `%s`.\n\n%s\n%s",
 						reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
-					if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
+					var err error
+					commentURL, err = runner.CommentPR(ctx, pr.Number, commentBody)
+					if err != nil {
 						fmt.Printf("Warning: failed to comment on vetoed PR #%d: %v\n", pr.Number, err)
 					}
 				}
 				summaries = append(summaries, PRSummaryResult{
-					Number: pr.Number,
-					Title:  pr.Title,
-					Author: pr.Author.Login,
-					Action: ActionVetoed,
-					Source: SourceVulnerability,
-					Reason: fmt.Sprintf("vulnerability scan: %s", reason),
+					Number:     pr.Number,
+					Title:      pr.Title,
+					Author:     pr.Author.Login,
+					Action:     ActionVetoed,
+					Source:     SourceVulnerability,
+					Reason:     fmt.Sprintf("vulnerability scan: %s", reason),
+					CommentURL: commentURL,
 				})
 				continue
 			}
@@ -1723,6 +1743,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 
 			if veto {
 				fmt.Printf("PR #%d (%s): VETOED by LLM veto: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
+				var commentURL string
 				if !hasLabel(pr, vetoLabelName) {
 					if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
 						fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
@@ -1738,17 +1759,20 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					fullSteps := completeSkippedSteps(vetoSteps, cfg)
 					commentBody := fmt.Sprintf("Automerge was vetoed by LLM veto: %s. Marking with `%s`.\n\n%s\n%s",
 						reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
-					if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
+					var err error
+					commentURL, err = runner.CommentPR(ctx, pr.Number, commentBody)
+					if err != nil {
 						fmt.Printf("Warning: failed to comment on vetoed PR #%d: %v\n", pr.Number, err)
 					}
 				}
 				summaries = append(summaries, PRSummaryResult{
-					Number: pr.Number,
-					Title:  pr.Title,
-					Author: pr.Author.Login,
-					Action: ActionVetoed,
-					Source: SourceLLMVeto,
-					Reason: fmt.Sprintf("LLM veto: %s", reason),
+					Number:     pr.Number,
+					Title:      pr.Title,
+					Author:     pr.Author.Login,
+					Action:     ActionVetoed,
+					Source:     SourceLLMVeto,
+					Reason:     fmt.Sprintf("LLM veto: %s", reason),
+					CommentURL: commentURL,
 				})
 				continue
 			}
@@ -1783,16 +1807,18 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 			// a merge attempt can fail due to race conditions or conflicts.
 			commentBody := fmt.Sprintf("Merged automatically.\n\n%s\n%s",
 				formatEvaluationSteps(prSteps), meta.ProvenanceText("Merged automatically"))
-			if err := runner.CommentPR(ctx, pr.Number, commentBody); err != nil {
+			commentURL, err := runner.CommentPR(ctx, pr.Number, commentBody)
+			if err != nil {
 				fmt.Printf("Warning: failed to post merge comment for PR #%d: %v\n", pr.Number, err)
 			}
 			summaries = append(summaries, PRSummaryResult{
-				Number: pr.Number,
-				Title:  pr.Title,
-				Author: pr.Author.Login,
-				Action: ActionMerged,
-				Source: SourceMerge,
-				Reason: "merged successfully",
+				Number:     pr.Number,
+				Title:      pr.Title,
+				Author:     pr.Author.Login,
+				Action:     ActionMerged,
+				Source:     SourceMerge,
+				Reason:     "merged successfully",
+				CommentURL: commentURL,
 			})
 		}
 	}
