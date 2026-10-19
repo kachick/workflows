@@ -34,7 +34,8 @@ jobs:
 
 ### Tips: Distribute Schedules Across Repositories
 
-When running `bump-flake-lock` across multiple repositories, running them on the 1st of every month keeps your local Nix store size consistent (shared inputs). Distribute the minute (0-59) and hour (0-5) across repositories so GitHub App API rate limits and runner contention are avoided:
+- **Keep the day fixed (1st of month)**: Running on the 1st of every month across repositories keeps local Nix store size consistent and avoids rebuilds by sharing the same Nixpkgs revision.
+- **Distribute the hour and minute**: Bump PRs trigger downstream workflows: `nix-diff-closures` calls Google's OSV API, and subsequent `automerge` calls Google's Gemini API (for LLM veto). Distributing the minute (0-59) and hour (0-5) spreads out PR creation and avoids hitting rate limits on these external APIs all at once:
 
 ```console
 # Calculate deterministic minute (0-59) and hour (0-5) using Ruby

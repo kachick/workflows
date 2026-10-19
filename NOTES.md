@@ -95,6 +95,14 @@
 - **Clear CI boundaries**:
   Diff generation and PR comments finish cleanly. A separate gate step fails intentionally when vulnerabilities exist, making the cause clear in the GitHub Actions UI while safely stopping `automerge`.
 
+### Monthly flake updates with schedule jitter
+
+- **Fixed date across repositories**:
+  - Running `bump-flake-lock` on the 1st of every month across all repositories aligns Nixpkgs revisions, keeping local store growth minimal and reducing rebuild times on developer machines.
+- **Hour and minute jitter across repositories**:
+  - Creating bump PRs triggers downstream checks: `nix-diff-closures` queries Google's OSV API, and subsequent `automerge` queries Google's Gemini API for LLM veto.
+  - Distributing the hour (0-5) and minute (0-59) via CRC32 spreads out PR creation and avoids hitting external API rate limits (OSV and Gemini) when many repositories update on the same day.
+
 ### Do not add dry-run mode to workflows
 
 - Do not add `dry-run` options to workflows to keep them simple.
