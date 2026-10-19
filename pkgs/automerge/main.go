@@ -1039,7 +1039,11 @@ func buildOSVScannerArgs(dir, configFile string) []string {
 	// Repositories without lockfiles (such as gem libraries where Gemfile.lock is gitignored)
 	// cause osv-scanner to exit with status 128 ("No package sources found").
 	// Passing --allow-no-lockfiles lets osv-scanner return an empty result with exit status 0.
-	args := []string{"scan", "source", "-r", dir, "--format=json", "--no-call-analysis=go", "--allow-no-lockfiles"}
+	//
+	// Why --all-packages:
+	// osv-scanner omits clean packages and sources from JSON results by default.
+	// Passing --all-packages ensures scanned lockfiles appear in results even when no vulnerabilities are found.
+	args := []string{"scan", "source", "-r", dir, "--format=json", "--no-call-analysis=go", "--allow-no-lockfiles", "--all-packages"}
 	if configFile != "" {
 		args = append(args, "--config="+configFile)
 	} else {

@@ -1453,6 +1453,9 @@ func TestResolveOSVConfigIgnoresPatchedTree(t *testing.T) {
 	if !slices.Contains(argsWithoutBaseConfig, "--allow-no-lockfiles") {
 		t.Errorf("expected --allow-no-lockfiles in args, got %v", argsWithoutBaseConfig)
 	}
+	if !slices.Contains(argsWithoutBaseConfig, "--all-packages") {
+		t.Errorf("expected --all-packages in args, got %v", argsWithoutBaseConfig)
+	}
 	if !slices.Contains(argsWithoutBaseConfig, "--config="+os.DevNull) {
 		t.Errorf("expected --config=%s when baseDir has no config, got %v", os.DevNull, argsWithoutBaseConfig)
 	}
@@ -1473,6 +1476,9 @@ func TestResolveOSVConfigIgnoresPatchedTree(t *testing.T) {
 	argsWithBaseConfig := buildOSVScannerArgs(patchedDir, resolvedTrusted)
 	if !slices.Contains(argsWithBaseConfig, "--allow-no-lockfiles") {
 		t.Errorf("expected --allow-no-lockfiles in args, got %v", argsWithBaseConfig)
+	}
+	if !slices.Contains(argsWithBaseConfig, "--all-packages") {
+		t.Errorf("expected --all-packages in args, got %v", argsWithBaseConfig)
 	}
 	if !slices.Contains(argsWithBaseConfig, "--config="+trustedConfig) {
 		t.Errorf("expected --config=%s when scanning patchedDir, got %v", trustedConfig, argsWithBaseConfig)
@@ -2211,6 +2217,29 @@ func TestScanDirectoryWithoutLockfiles(t *testing.T) {
 	}
 	if res.sourceCount != 0 {
 		t.Errorf("expected 0 sources scanned, got %d", res.sourceCount)
+	}
+	if len(res.ids) != 0 {
+		t.Errorf("expected 0 vulnerability IDs, got %v", res.ids)
+	}
+}
+
+func TestScanDirectoryWithCleanLockfile(t *testing.T) {
+	if _, err := exec.LookPath("osv-scanner"); err != nil {
+		t.Skip("osv-scanner binary not available in PATH, skipping live scan test")
+	}
+
+	dir := t.TempDir()
+	goModContent := "module example.com/test\n\ngo 1.24\n\nrequire github.com/google/go-cmp v0.7.0\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goModContent), 0o600); err != nil {
+		t.Fatalf("failed to write go.mod: %v", err)
+	}
+
+	res, err := scanDirectory(context.Background(), dir, "")
+	if err != nil {
+		t.Fatalf("expected scanDirectory to succeed on directory with clean lockfile, got error: %v", err)
+	}
+	if res.sourceCount != 1 {
+		t.Errorf("expected 1 source scanned, got %d", res.sourceCount)
 	}
 	if len(res.ids) != 0 {
 		t.Errorf("expected 0 vulnerability IDs, got %v", res.ids)
