@@ -451,21 +451,27 @@ func (m *mockReviewer) ReviewPR(ctx context.Context, pr PullRequest, diff string
 	return false, "default mock pass", nil
 }
 
+type mockVulnDecision struct {
+	Veto    bool
+	Skipped bool
+	Reason  string
+}
+
 type mockVulnScanner struct {
-	scans    map[int]vetoDecision
+	scans    map[int]mockVulnDecision
 	scanErrs map[int]error
 	calledOn []int
 }
 
-func (m *mockVulnScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (bool, string, error) {
+func (m *mockVulnScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (bool, bool, string, error) {
 	m.calledOn = append(m.calledOn, pr.Number)
 	if err, ok := m.scanErrs[pr.Number]; ok {
-		return false, "", err
+		return false, false, "", err
 	}
 	if decision, ok := m.scans[pr.Number]; ok {
-		return decision.Veto, decision.Reason, nil
+		return decision.Veto, decision.Skipped, decision.Reason, nil
 	}
-	return false, "default mock vuln pass", nil
+	return false, false, "default mock vuln pass", nil
 }
 
 func TestExecute(t *testing.T) {
@@ -1507,6 +1513,14 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
 		},
+		{
+			Number:            404,
+			Title:             "No lockfile update",
+			Body:              validRenovateBody,
+			Author:            Author{Login: "renovate[bot]"},
+			Mergeable:         "MERGEABLE",
+			StatusCheckRollup: validChecks,
+		},
 	}
 
 	runner := &mockRunner{
@@ -1514,9 +1528,10 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 	}
 
 	vulnScanner := &mockVulnScanner{
-		scans: map[int]vetoDecision{
+		scans: map[int]mockVulnDecision{
 			401: {Veto: false, Reason: "no new vulnerabilities"},
 			402: {Veto: true, Reason: "new vulnerability: GHSA-1234"},
+			404: {Skipped: true, Reason: "skipped (no supported lockfiles found)"},
 		},
 		scanErrs: map[int]error{
 			403: errors.New("simulated scanner failure"),
@@ -1542,21 +1557,29 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 	// 401: pass (both vuln scan & reviewer pass -> merged)
 	// 402: vetoed by vuln scan (reviewer must NOT be called -> tokens saved)
 	// 403: scanner error -> skipped gracefully
-	expectedMerged := []int{401}
+	// 404: vuln scan skipped (no lockfiles) & reviewer pass -> merged
+	expectedMerged := []int{401, 404}
 	if !slices.Equal(runner.mergedPRs, expectedMerged) {
 		t.Errorf("expected merged PRs %v, got %v", expectedMerged, runner.mergedPRs)
 	}
 
-	// Vulnerability scanner called for all 3
-	expectedVulnCalls := []int{401, 402, 403}
+	// Vulnerability scanner called for all 4
+	expectedVulnCalls := []int{401, 402, 403, 404}
 	if !slices.Equal(vulnScanner.calledOn, expectedVulnCalls) {
 		t.Errorf("expected vuln scanner called on %v, got %v", expectedVulnCalls, vulnScanner.calledOn)
 	}
 
-	// Reviewer must only be called for 401 (402 was vetoed prior, 403 failed prior)
-	expectedReviewerCalls := []int{401}
+	// Reviewer must only be called for 401 and 404 (402 was vetoed prior, 403 failed prior)
+	expectedReviewerCalls := []int{401, 404}
 	if !slices.Equal(reviewer.calledOn, expectedReviewerCalls) {
 		t.Errorf("expected reviewer called on %v, got %v", expectedReviewerCalls, reviewer.calledOn)
+	}
+
+	// 404 merge comment must indicate intentional skip with :heavy_minus_sign:
+	comment404 := strings.Join(runner.comments[404], "\n")
+	expectedMarker := "- :heavy_minus_sign: Vulnerability scan (OSV-Scanner): skipped (no supported lockfiles found)"
+	if !strings.Contains(comment404, expectedMarker) {
+		t.Errorf("expected PR 404 comment to contain %q, got:\n%s", expectedMarker, comment404)
 	}
 
 	// 402 must be labeled with vetoLabelName
@@ -1872,6 +1895,26 @@ func TestFormatEvaluationSteps(t *testing.T) {
 		if !strings.Contains(formatted, line) {
 			t.Errorf("formatEvaluationSteps() missing expected line %q, got:\n%s", line, formatted)
 		}
+	}
+}
+
+func TestFormatEvaluationStepsWithNeutral(t *testing.T) {
+	steps := []EvaluationStep{
+		{Name: "Author is in allowed bots", Status: StepPassed, Details: "@samuebot[bot]"},
+		{Name: "PR is not a draft", Status: StepPassed},
+		{Name: "PR has no veto or block labels", Status: StepPassed},
+		{Name: "GitHub mergeable state is clean", Status: StepPassed, Details: "MERGEABLE"},
+		{Name: "All status checks completed successfully", Status: StepPassed, Details: "4/4 checks passed"},
+		{Name: "Version bump policy", Status: StepPassed, Details: "non-breaking update"},
+		{Name: "Vulnerability scan (OSV-Scanner)", Status: StepNeutral, Details: "skipped (no supported lockfiles found)"},
+		{Name: "LLM veto", Status: StepPassed, Details: "no risks detected"},
+		{Name: "Merge PR", Status: StepPassed, Details: "squash"},
+	}
+
+	formatted := formatEvaluationSteps(steps)
+	expectedLine := "- :heavy_minus_sign: Vulnerability scan (OSV-Scanner): skipped (no supported lockfiles found)"
+	if !strings.Contains(formatted, expectedLine) {
+		t.Errorf("formatEvaluationSteps() missing expected neutral line %q, got:\n%s", expectedLine, formatted)
 	}
 }
 

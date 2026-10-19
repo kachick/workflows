@@ -83,6 +83,7 @@ const (
 	StepPassed StepStatus = iota
 	StepFailed
 	StepSkipped
+	StepNeutral
 )
 
 type EvaluationStep struct {
@@ -845,7 +846,7 @@ func retryMergeable(ctx context.Context, runner CommandRunner, pr PullRequest, a
 }
 
 type VulnerabilityScanner interface {
-	ScanPR(ctx context.Context, pr PullRequest, diff string) (veto bool, reason string, err error)
+	ScanPR(ctx context.Context, pr PullRequest, diff string) (veto bool, skipped bool, reason string, err error)
 }
 
 type osvScanOutput struct {
@@ -888,12 +889,12 @@ func NewOSVScanner(baseDir string) *OSVScanner {
 	return &OSVScanner{baseDir: baseDir}
 }
 
-func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (bool, string, error) {
+func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (bool, bool, string, error) {
 	repoDir := s.baseDir
 	if repoDir == "" || repoDir == "." {
 		root, err := findRepoRoot(ctx)
 		if err != nil {
-			return false, "", err
+			return false, false, "", err
 		}
 		repoDir = root
 	}
@@ -903,7 +904,7 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 	if !s.baseScanned {
 		res, err := scanDirectory(ctx, repoDir, configFile)
 		if err != nil {
-			return false, "", fmt.Errorf("osv-scanner failed on base repository: %w", err)
+			return false, false, "", fmt.Errorf("osv-scanner failed on base repository: %w", err)
 		}
 		s.baseResult = res
 		s.baseScanned = true
@@ -911,23 +912,27 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 
 	tmpDir, err := os.MkdirTemp("", "automerge-osv-*")
 	if err != nil {
-		return false, "", fmt.Errorf("failed to create temp dir: %w", err)
+		return false, false, "", fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
 	if err := extractBaseTree(ctx, repoDir, tmpDir); err != nil {
-		return false, "", fmt.Errorf("failed to extract base tree: %w", err)
+		return false, false, "", fmt.Errorf("failed to extract base tree: %w", err)
 	}
 
 	if err := applyPatch(ctx, tmpDir, diff); err != nil {
-		return false, "", fmt.Errorf("failed to apply PR diff: %w", err)
+		return false, false, "", fmt.Errorf("failed to apply PR diff: %w", err)
 	}
 
 	// Pass configFile from the base repository rather than resolving inside tmpDir,
 	// so a pull request cannot silence its own vulnerabilities by editing osv-scanner.toml.
 	prRes, err := scanDirectory(ctx, tmpDir, configFile)
 	if err != nil {
-		return false, "", fmt.Errorf("osv-scanner failed on patched PR tree: %w", err)
+		return false, false, "", fmt.Errorf("osv-scanner failed on patched PR tree: %w", err)
+	}
+
+	if prRes.sourceCount == 0 {
+		return false, true, "skipped (no supported lockfiles found)", nil
 	}
 
 	baseSet := make(map[string]bool, len(s.baseResult.ids))
@@ -948,10 +953,10 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 
 	if len(newVulns) > 0 {
 		sort.Strings(newVulns)
-		return true, fmt.Sprintf("new vulnerabilities introduced: %s", strings.Join(newVulns, ", ")), nil
+		return true, false, fmt.Sprintf("new vulnerabilities introduced: %s", strings.Join(newVulns, ", ")), nil
 	}
 
-	return false, fmt.Sprintf("no new vulnerabilities introduced (scanned sources: %d, base vulns: %d, pr vulns: %d)",
+	return false, false, fmt.Sprintf("no new vulnerabilities introduced (scanned sources: %d, base vulns: %d, pr vulns: %d)",
 		prRes.sourceCount, len(s.baseResult.ids), len(prRes.ids)), nil
 }
 
@@ -1468,9 +1473,15 @@ func formatEvaluationSteps(steps []EvaluationStep) string {
 			icon = ":x:"
 		case StepSkipped:
 			icon = ":white_large_square:"
+		case StepNeutral:
+			// Why :heavy_minus_sign: instead of :white_large_square: or :warning::
+			// :white_large_square: looks like the check was not evaluated at all (e.g. aborted early by prior failures).
+			// :warning: looks like an active risk or failure that requires user intervention.
+			// :heavy_minus_sign: clearly shows the scanner ran and intentionally concluded there were no applicable targets.
+			icon = ":heavy_minus_sign:"
 		}
 
-		if s.Status == StepSkipped || s.Details == "" {
+		if s.Details == "" {
 			sb.WriteString(fmt.Sprintf("- %s %s\n", icon, s.Name))
 		} else {
 			sb.WriteString(fmt.Sprintf("- %s %s: %s\n", icon, s.Name, s.Details))
@@ -1723,7 +1734,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 
 			if vulnScanner != nil {
 				fmt.Printf("Running vulnerability diff scan for PR #%d (%s)...\n", pr.Number, pr.Title)
-				veto, reason, err := vulnScanner.ScanPR(ctx, pr, diff)
+				veto, skipped, reason, err := vulnScanner.ScanPR(ctx, pr, diff)
 				if err != nil {
 					fmt.Printf("Warning: vulnerability scan failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
 					summaries = append(summaries, PRSummaryResult{
@@ -1773,12 +1784,21 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					return
 				}
 
-				fmt.Printf("PR #%d (%s): vulnerability scan passed: %s.\n", pr.Number, pr.Title, reason)
-				prSteps = append(prSteps, EvaluationStep{
-					Name:    "Vulnerability scan (OSV-Scanner)",
-					Status:  StepPassed,
-					Details: reason,
-				})
+				if skipped {
+					fmt.Printf("PR #%d (%s): vulnerability scan skipped: %s.\n", pr.Number, pr.Title, reason)
+					prSteps = append(prSteps, EvaluationStep{
+						Name:    "Vulnerability scan (OSV-Scanner)",
+						Status:  StepNeutral,
+						Details: reason,
+					})
+				} else {
+					fmt.Printf("PR #%d (%s): vulnerability scan passed: %s.\n", pr.Number, pr.Title, reason)
+					prSteps = append(prSteps, EvaluationStep{
+						Name:    "Vulnerability scan (OSV-Scanner)",
+						Status:  StepPassed,
+						Details: reason,
+					})
+				}
 			}
 
 			if cfg.LLMVeto {
