@@ -47,6 +47,12 @@ jobs:
         homeConfigurations.kachick.activationPackage
 ```
 
+### Tips: External API Limits in Downstream Jobs
+
+`nix-diff-closures` queries Google's OSV API when pull requests change `flake.lock`. To avoid hitting the OSV API all at once across repositories, distribute upstream `bump-flake-lock` schedules.
+
+See [Distribute Schedules Across Repositories](../../README.md#distribute-schedules-across-repositories) in the root README for recommended schedule rules and helper scripts.
+
 ### CLI
 
 ```console

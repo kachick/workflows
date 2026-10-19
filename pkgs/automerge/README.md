@@ -107,15 +107,7 @@ jobs:
 
 ### Tips: Distribute Schedules Across Repositories
 
-When running `automerge` across multiple repositories under the same owner, pick a different cron minute per repository so shared GitHub App and Gemini API rate limits are not hit at the same instant:
-
-```console
-# Query repository ID and calculate minute (0-59) via GitHub CLI
-gh api repos/:owner/:repo --jq '.id % 60'
-
-# Or calculate deterministically from the repository name using Ruby
-ruby -e 'require "zlib"; puts Zlib.crc32("kachick/workflows") % 60'
-```
+See [Distribute Schedules Across Repositories](../../README.md#distribute-schedules-across-repositories) in the root README for recommended schedule rules and helper scripts.
 
 ### CLI
 

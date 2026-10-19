@@ -34,19 +34,7 @@ jobs:
 
 ### Tips: Distribute Schedules Across Repositories
 
-- **Keep the day fixed (1st of month)**: Running on the 1st of every month across repositories keeps local Nix store size consistent and avoids rebuilds by sharing the same Nixpkgs revision.
-- **Distribute the hour and minute**: Bump PRs trigger downstream workflows: `nix-diff-closures` calls Google's OSV API, and subsequent `automerge` calls Google's Gemini API (for LLM veto). Distributing the minute (0-59) and hour (0-5) spreads out PR creation and avoids hitting rate limits on these external APIs all at once:
-
-```console
-# Calculate deterministic minute (0-59) and hour (0-5) using Ruby
-ruby -e '
-  require "zlib"
-  crc = Zlib.crc32("kachick/workflows")
-  min = crc % 60
-  hour = (crc / 60) % 6
-  puts "#{min} #{hour} 1 * *"
-'
-```
+See [Distribute Schedules Across Repositories](../../README.md#distribute-schedules-across-repositories) in the root README for recommended schedule rules and helper scripts.
 
 ### CLI
 
