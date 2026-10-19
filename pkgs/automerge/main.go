@@ -1684,7 +1684,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 						Details: reason,
 					})
 					fullSteps := completeSkippedSteps(vetoSteps, cfg)
-					commentBody := fmt.Sprintf("Automerge was vetoed by vulnerability scan: %s. Marking with `%s`.\n\n%s\n%s",
+					commentBody := fmt.Sprintf("Automerge was vetoed by vulnerability scan: %s. Marking with `%s`.\n\nAs long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after resolving the vulnerability or pushing new commits.\n\n%s\n%s",
 						reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
 					var err error
 					commentURL, err = runner.CommentPR(ctx, pr.Number, commentBody)
@@ -1757,7 +1757,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 						Details: reason,
 					})
 					fullSteps := completeSkippedSteps(vetoSteps, cfg)
-					commentBody := fmt.Sprintf("Automerge was vetoed by LLM veto: %s. Marking with `%s`.\n\n%s\n%s",
+					commentBody := fmt.Sprintf("Automerge was vetoed by LLM veto: %s. Marking with `%s`.\n\nAs long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after updating the review bot or pushing new commits.\n\n%s\n%s",
 						reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
 					var err error
 					commentURL, err = runner.CommentPR(ctx, pr.Number, commentBody)

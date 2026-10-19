@@ -54,8 +54,12 @@ Preserve the following invariants when modifying or extending `automerge`:
   - `osv-scanner` deterministically compares base and PR trees to catch newly introduced CVEs in lockfiles (`flake.lock`, `go.mod`, `Cargo.lock`, `package-lock.json`, etc.).
   - Running this check first rejects known vulnerabilities immediately without spending LLM API tokens.
 - **Why negative labels are attached on block or veto**:
-  - Tagging `automerge:vetoed` prevents subsequent polling runs from calling the LLM API repeatedly on the same rejected diff. Removing the label re-enables evaluation on the next run.
-  - Tagging `automerge:blocked` on policy blocks (such as major updates) allows cross-repository filtering (`user:kachick is:pr is:open label:automerge:blocked`). Transient states like pending CI or merge conflicts are not labeled because they resolve on their own.
+  - Tagging `automerge:vetoed` prevents subsequent polling runs from calling the LLM API repeatedly on the same rejected diff. Removing the label re-enables evaluation on the next run after updating the review bot or pushing new commits.
+  - Tagging `automerge:blocked` on policy blocks (such as major updates) allows cross-repository filtering. Transient states like pending CI or merge conflicts are not labeled because they resolve on their own.
+  - Quick filter links across repositories:
+    - [Vetoed pull requests (`label:automerge:vetoed`)](https://github.com/pulls?q=is%3Apr+is%3Aopen+user%3Akachick+label%3Aautomerge%3Avetoed)
+    - [Blocked pull requests (`label:automerge:blocked`)](https://github.com/pulls?q=is%3Apr+is%3Aopen+user%3Akachick+label%3Aautomerge%3Ablocked)
+    - [All pull requests requiring review](https://github.com/pulls?q=is%3Apr+is%3Aopen+user%3Akachick+label%3Aautomerge%3Avetoed%2Cautomerge%3Ablocked)
 - **Why LLM inputs are bounded**:
   - Pull request descriptions and diffs are reordered and truncated before calling the LLM API to control token usage and keep model focus on high-signal changes.
 - **Side benefits of polling**:

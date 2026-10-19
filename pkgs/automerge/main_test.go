@@ -639,6 +639,9 @@ func TestExecuteLLMVeto(t *testing.T) {
 	if !strings.Contains(runner.comments[202][0], "- :x: LLM veto: breaking change found in release notes") {
 		t.Errorf("expected PR 202 comment to contain veto step, got %q", runner.comments[202][0])
 	}
+	if !strings.Contains(runner.comments[202][0], "As long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after updating the review bot or pushing new commits.") {
+		t.Errorf("expected PR 202 comment to contain next-step guidance, got %q", runner.comments[202][0])
+	}
 
 	// Subsequent runs must skip already vetoed PRs without calling reviewer or spending tokens
 	reviewer.calledOn = nil
