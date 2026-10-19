@@ -3,10 +3,12 @@ package report
 import (
 	"fmt"
 	"html"
+	"net/url"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/kachick/workflows/internal/workflowmeta"
+	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/osv"
 )
 
 // Marker is used to identify comments created by this action.
@@ -35,10 +37,11 @@ type Report struct {
 	FullDiffText    string
 	HasDiff         bool
 	IsTruncated     bool
+	Vulnerabilities []osv.PackageVulnerabilities
 }
 
-// Build generates the comment markdown and full diff text from target results.
-func Build(results []TargetResult, maxSize int, headSize int, meta workflowmeta.Metadata, isCI bool) (Report, error) {
+// Build generates the comment markdown and full diff text from target results and detected vulnerabilities.
+func Build(results []TargetResult, vulns []osv.PackageVulnerabilities, maxSize int, headSize int, meta workflowmeta.Metadata, isCI bool) (Report, error) {
 	if maxSize <= 0 {
 		maxSize = DefaultMaxSize
 	}
@@ -83,6 +86,21 @@ func Build(results []TargetResult, maxSize int, headSize int, meta workflowmeta.
 	md.WriteString(Marker + "\n\n")
 	if headerText != "" {
 		md.WriteString(headerText + "\n\n")
+	}
+
+	if len(vulns) > 0 {
+		md.WriteString("> [!CAUTION]\n")
+		md.WriteString("> **Known Vulnerabilities Detected in Updated Closure**\n>\n")
+		md.WriteString("> The following updated packages contain known vulnerabilities in the OSV database:\n")
+		for _, pv := range vulns {
+			var ids []string
+			for _, v := range pv.Vulnerabilities {
+				escapedID := html.EscapeString(v.ID)
+				ids = append(ids, fmt.Sprintf("[%s](https://osv.dev/vulnerability/%s)", escapedID, url.PathEscape(v.ID)))
+			}
+			md.WriteString(fmt.Sprintf("> - **%s** (`%s`): %s\n", html.EscapeString(pv.Package.Name), html.EscapeString(pv.Package.Version), strings.Join(ids, ", ")))
+		}
+		md.WriteString(">\n> *Note: This check fails intentionally when known vulnerabilities are detected, preventing automated merges (automerge) from introducing them without human review.*\n\n")
 	}
 
 	if isTruncated {
@@ -137,6 +155,7 @@ func Build(results []TargetResult, maxSize int, headSize int, meta workflowmeta.
 		FullDiffText:    fullDiff,
 		HasDiff:         true,
 		IsTruncated:     isTruncated,
+		Vulnerabilities: vulns,
 	}, nil
 }
 

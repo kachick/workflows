@@ -14,6 +14,7 @@ import (
 	"github.com/kachick/workflows/internal/workflowmeta"
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/diff"
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/gh"
+	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/osv"
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/report"
 )
 
@@ -42,6 +43,9 @@ func run() error {
 		postComment    bool
 		repoDir        string
 		stepSummaryOut bool
+		checkVulns     bool
+		osvEndpoint    string
+		failOnVuln     bool
 	)
 
 	flag.StringVar(&baseRev, "base-rev", "", "Base git revision (e.g. PR base SHA)")
@@ -56,6 +60,9 @@ func run() error {
 	flag.BoolVar(&postComment, "post-comment", true, "Whether to post comment on GitHub PR")
 	flag.StringVar(&repoDir, "repo-dir", ".", "Repository root directory")
 	flag.BoolVar(&stepSummaryOut, "write-step-summary", true, "Whether to append to $GITHUB_STEP_SUMMARY")
+	flag.BoolVar(&checkVulns, "check-vulnerabilities", true, "Check updated packages against OSV API")
+	flag.StringVar(&osvEndpoint, "osv-endpoint", osv.DefaultEndpoint, "OSV API batch query endpoint")
+	flag.BoolVar(&failOnVuln, "fail-on-vulnerability", false, "Exit with non-zero status if vulnerabilities are detected")
 	flag.Parse()
 
 	// Environment variable fallbacks for GitHub Actions
@@ -79,6 +86,19 @@ func run() error {
 		token = os.Getenv("GITHUB_TOKEN")
 		if token == "" {
 			token = os.Getenv("GH_TOKEN")
+		}
+	}
+	if envVal := os.Getenv("CHECK_VULNERABILITIES"); envVal != "" {
+		if b, err := strconv.ParseBool(envVal); err == nil {
+			checkVulns = b
+		}
+	}
+	if envVal := os.Getenv("OSV_ENDPOINT"); envVal != "" {
+		osvEndpoint = envVal
+	}
+	if envVal := os.Getenv("FAIL_ON_VULNERABILITY"); envVal != "" {
+		if b, err := strconv.ParseBool(envVal); err == nil {
+			failOnVuln = b
 		}
 	}
 
@@ -105,10 +125,41 @@ func run() error {
 		return fmt.Errorf("failed to compute closure diffs: %w", err)
 	}
 
+	var vulns []osv.PackageVulnerabilities
+	if checkVulns {
+		var allPkgs []osv.Package
+		seenPkgs := make(map[string]bool)
+		for _, res := range results {
+			if res.DiffText != "" {
+				pkgs := diff.ExtractUpdatedPackages(res.DiffText)
+				for _, p := range pkgs {
+					key := p.Name + "@" + p.Version
+					if !seenPkgs[key] {
+						seenPkgs[key] = true
+						allPkgs = append(allPkgs, osv.Package{
+							Name:    p.Name,
+							Version: p.Version,
+						})
+					}
+				}
+			}
+		}
+
+		if len(allPkgs) > 0 {
+			osvClient := osv.NewClient(osvEndpoint)
+			v, err := osvClient.QueryBatch(ctx, allPkgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to query OSV API: %v\n", err)
+			} else {
+				vulns = v
+			}
+		}
+	}
+
 	meta := workflowmeta.Get()
 	isCI := os.Getenv("GITHUB_ACTIONS") == "true"
 
-	rep, err := report.Build(results, maxSize, headSize, meta, isCI)
+	rep, err := report.Build(results, vulns, maxSize, headSize, meta, isCI)
 	if err != nil {
 		return fmt.Errorf("failed to build report: %w", err)
 	}
@@ -133,6 +184,8 @@ func run() error {
 
 	writeGHAOutput("has_diff", strconv.FormatBool(rep.HasDiff))
 	writeGHAOutput("is_truncated", strconv.FormatBool(rep.IsTruncated))
+	writeGHAOutput("has_vulnerabilities", strconv.FormatBool(len(vulns) > 0))
+	writeGHAOutput("vulnerabilities_count", strconv.Itoa(len(vulns)))
 
 	if stepSummaryOut && rep.HasDiff {
 		writeStepSummary(rep.CommentMarkdown)
@@ -182,6 +235,10 @@ func run() error {
 			return fmt.Errorf("failed to post pull request comment: %w", err)
 		}
 		fmt.Printf("Successfully posted diff comment to PR #%d\n", prNumber)
+	}
+
+	if failOnVuln && len(vulns) > 0 {
+		return fmt.Errorf("detected %d package(s) with known vulnerabilities in closure diff", len(vulns))
 	}
 
 	return nil

@@ -16,6 +16,8 @@ Post Nix closure differences on pull requests when `flake.lock` changes.
   Minimizes previous diff comments as `OUTDATED` when new commits are pushed, keeping pull request discussions clean without duplicate noise.
 - **Reusable workflow**:
   Provided as a reusable workflow (`workflow_call`) so other repositories can use it with only a few lines of configuration.
+- **Differential vulnerability scanning**:
+  Extracts updated packages from closure diffs and checks them against the OSV (Open Source Vulnerabilities) database in a single batch query. When known vulnerabilities are found, the PR comment includes a caution alert, and the workflow fails intentionally to prevent unintended automerge.
 - **Logic inside a dedicated CLI**:
   Keeps shell scripts minimal and puts core logic (diffing, truncation, and GitHub API operations) into a Go CLI to make local testing easy.
 

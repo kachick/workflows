@@ -34,6 +34,11 @@ on:
         required: false
         type: number
         default: 40000
+      check-vulnerabilities:
+        description: 'Whether to check updated packages against OSV API'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -45,6 +50,11 @@ jobs:
     permissions:
       contents: read
       pull-requests: write # Post closure differences to PR comments
+    outputs:
+      has-diff: ${{ steps.diff.outputs.has_diff }}
+      is-truncated: ${{ steps.diff.outputs.is_truncated }}
+      has-vulnerabilities: ${{ steps.diff.outputs.has_vulnerabilities }}
+      vulnerabilities-count: ${{ steps.diff.outputs.vulnerabilities_count }}
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 30
     steps:
@@ -71,6 +81,7 @@ jobs:
           POST_COMMENT: ${{ inputs.post-comment }}
           MAX_SIZE: ${{ inputs.max-size }}
           HEAD_SIZE: ${{ inputs.head-size }}
+          CHECK_VULNS: ${{ inputs.check-vulnerabilities }}
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
           WORKFLOW_SHA: ${{ job.workflow_sha }}
           WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
@@ -89,8 +100,17 @@ jobs:
             --post-comment="${POST_COMMENT}" \
             --max-size="${MAX_SIZE}" \
             --head-size="${HEAD_SIZE}" \
+            --check-vulnerabilities="${CHECK_VULNS}" \
             --output-comment="${RUNNER_TEMP}/comment.md" \
             --output-full-diff="${RUNNER_TEMP}/diff.txt"
+
+      - name: Gate check for newly introduced vulnerabilities
+        if: steps.diff.outputs.has_vulnerabilities == 'true'
+        env:
+          VULN_COUNT: ${{ steps.diff.outputs.vulnerabilities_count }}
+        run: |
+          echo "::error::New vulnerabilities detected in closure update (${VULN_COUNT} package(s) affected). Intentionally failing this check to prevent unattended automerge."
+          exit 1
 
       - name: Upload full diff artifact
         if: steps.diff.outputs.is_truncated == 'true'
