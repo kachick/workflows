@@ -16,5 +16,5 @@
 
 ## Ecosystem & Language Priorities
 
-- Keep workflows and tools general across ecosystems, but ensure compatibility and prioritize test cases in this order: `nix`, `go`, `rust`, `gha`, `typescript`, `shellscript`, `ruby`, `python` (`nix` and `go` take top priority).
+- Keep workflows and tools general across ecosystems, but ensure compatibility and prioritize test cases in this priority order: `nix` > `go` > `rust` > `gha` > `typescript` > `shellscript` > `ruby` > `python`.
 - When integrating dependency checks or tools like `osv-scanner`, keep ecosystem limits in mind (e.g., `flake.lock` is not supported directly by `osv-scanner`) and consider lockfiles in the priority order above instead of testing every pattern.
