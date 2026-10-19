@@ -19,7 +19,7 @@ func main() {
 	}
 
 	if len(missing) > 0 {
-		fmt.Fprintln(os.Stderr, "workflowlint: missing reusable workflows in README.md:")
+		fmt.Fprintln(os.Stderr, "workflowlint: missing reusable workflows in documentation:")
 		for _, name := range missing {
 			fmt.Fprintf(os.Stderr, "  - %s (.github/workflows/reusable-%s.yml)\n", name, name)
 		}

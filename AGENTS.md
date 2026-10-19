@@ -9,7 +9,8 @@
 
 ## Documentation Boundaries
 
-- `README.md`: Essential usage and quick references needed during daily operations or onboarding for both humans and agents; keep it solid.
+- `README.md`: Essential daily operations and quick references (such as PR triage) for personal use; keep it solid.
+- `docs/onboarding.md`: Caller onboarding, available workflows, and schedule distribution rules.
 - `pkgs/<name>/README.md`: Workflow-specific details and instructions that are not constantly needed in the root `README.md`.
 - `NOTES.md`: Repository-wide topics; separate desired requirements and priorities in upper sections from current choices driven by technical constraints in lower sections.
 - `AGENTS.md`: Maintainer preferences and common LLM pitfalls; keep every item concise.

@@ -19,7 +19,7 @@ var (
 var (
 	ErrWorkflowDirNotFound = errors.New("workflow directory not found")
 	ErrReadmeNotFound      = errors.New("README.md not found")
-	ErrSectionNotFound     = errors.New("Available Workflows section not found in README.md")
+	ErrSectionNotFound     = errors.New("Available Workflows section not found in documentation")
 )
 
 // ExtractWorkflowName returns the workflow identifier from a filename.
@@ -134,25 +134,28 @@ func FindMissingWorkflows(existing []string, documented map[string]bool) []strin
 	return missing
 }
 
-// Check validates that all reusable workflows in repoRoot are documented in README.md.
+// Check validates that all reusable workflows in repoRoot are documented in docs/onboarding.md (or README.md).
 func Check(repoRoot string) ([]string, error) {
 	workflowDir := filepath.Join(repoRoot, ".github", "workflows")
-	readmePath := filepath.Join(repoRoot, "README.md")
+	docPath := filepath.Join(repoRoot, "docs", "onboarding.md")
+	if _, err := os.Stat(docPath); os.IsNotExist(err) {
+		docPath = filepath.Join(repoRoot, "README.md")
+	}
 
 	existing, err := FindReusableWorkflows(workflowDir)
 	if err != nil {
 		return nil, err
 	}
 
-	readmeBytes, err := os.ReadFile(readmePath)
+	docBytes, err := os.ReadFile(docPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%w: %s", ErrReadmeNotFound, readmePath)
+			return nil, fmt.Errorf("%w: %s", ErrReadmeNotFound, docPath)
 		}
-		return nil, fmt.Errorf("read README: %w", err)
+		return nil, fmt.Errorf("read documentation: %w", err)
 	}
 
-	documented, err := ParseDocumentedWorkflows(string(readmeBytes))
+	documented, err := ParseDocumentedWorkflows(string(docBytes))
 	if err != nil {
 		return nil, err
 	}
