@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kachick/workflows/internal/workflowlint"
+	"github.com/kachick/workflows/cmd/workflowlint/internal/workflowlint"
 )
 
 func main() {

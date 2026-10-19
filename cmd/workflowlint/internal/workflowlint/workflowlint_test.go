@@ -90,8 +90,8 @@ func TestFindMissingWorkflows(t *testing.T) {
 }
 
 func TestCheckCurrentRepository(t *testing.T) {
-	// Root of the repository is two directories up from internal/workflowlint
-	repoRoot := filepath.Join("..", "..")
+	// Root of the repository is four directories up from cmd/workflowlint/internal/workflowlint
+	repoRoot := filepath.Join("..", "..", "..", "..")
 
 	missing, err := Check(repoRoot)
 	if err != nil {
@@ -207,7 +207,7 @@ jobs:
 }
 
 func TestCheckNixInstallerStepsCurrentRepository(t *testing.T) {
-	repoRoot := filepath.Join("..", "..")
+	repoRoot := filepath.Join("..", "..", "..", "..")
 	if err := CheckNixInstallerSteps(repoRoot); err != nil {
 		t.Fatalf("CheckNixInstallerSteps(repoRoot) failed: %v", err)
 	}
@@ -327,7 +327,7 @@ jobs:
 }
 
 func TestCheckReusableJobGuardsCurrentRepository(t *testing.T) {
-	repoRoot := filepath.Join("..", "..")
+	repoRoot := filepath.Join("..", "..", "..", "..")
 	if err := CheckReusableJobGuards(repoRoot); err != nil {
 		t.Fatalf("CheckReusableJobGuards(repoRoot) failed: %v", err)
 	}
