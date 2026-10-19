@@ -65,6 +65,36 @@
   - **Zero vendorHash maintenance toil**: In fact, `go.mod` in this repository remains empty. This avoids a major pain point of Nix + Go: updating `vendorHash` every time dependencies change. With zero external packages, package definitions keep `vendorHash = null`, removing maintenance toil and keeping Nix builds simple.
   - **Low context switching and fast runs**: Go reduces setup time, and `go test` and `go run` execute fast on standard runners without extra toolchains.
 
+### Vulnerability detection for flake.lock: Why closure diffs with OSV over existing tools
+
+- While `osv-scanner` checks application lockfiles (`go.mod`, `package-lock.json`, etc.) in `automerge`, `flake.lock` updates cannot be scanned directly. `flake.lock` only stores commit hashes of Nixpkgs, not the resolved dependency packages.
+- Scanning the entire Nixpkgs repository is not possible and would flag thousands of unrelated CVEs. In addition, analyzing flake structures inside `automerge` does not work well: runner systems (such as macOS vs Linux) differ across repositories, and target derivations (`devShells`, `packages`, etc.) cannot be guessed centrally.
+- Instead, the check runs inside PR CI via `nix-diff-closures`. It extracts newly updated packages from the closure diff and queries the OSV API in a single batch request (`POST /v1/querybatch`).
+
+#### Why not alternative tools
+
+- **Why not `NixOS/nix-security-tracker`**:
+  - It is a central web service for the NixOS security team to track CVE links across Nixpkgs channels.
+  - It does not provide a CLI or public API to scan user-provided `flake.lock` files or closure store paths on demand.
+- **Why not `nix-community/vulnix`**:
+  - It matches derivations against NVD (NIST) using rough name rules.
+  - Checking whole closures produces many false positives. This creates heavy ignore-list maintenance toil and stops unattended automerge.
+  - It also adds Python dependencies and hits strict NVD API rate limits.
+- **Why not `anchore/grype` (with Syft)**:
+  - Scanning whole closure trees flags false positives for packages where Nixpkgs already backported security fixes.
+  - Downloading large vulnerability databases adds runner overhead and external tool dependencies, going against the minimal tooling policy.
+
+#### Advantages of closure diffs with OSV batch query
+
+- **Zero noise from unchanged packages**:
+  Checking only packages that changed versions in the diff catches newly introduced vulnerabilities without stopping automerge for existing issues.
+- **Minimal tooling and zero vendorHash toil**:
+  The OSV batch API accepts package names and versions directly. It runs in pure Go using only the standard library, keeping `vendorHash = null` and adding no external CLI tools.
+- **Shared protection across all Nix targets**:
+  The same check protects devShell tools in small repositories as well as full system closures in NixOS and Home Manager configurations.
+- **Clear CI boundaries**:
+  Diff generation and PR comments finish cleanly. A separate gate step fails intentionally when vulnerabilities exist, making the cause clear in the GitHub Actions UI while safely stopping `automerge`.
+
 ### Do not add dry-run mode to workflows
 
 - Do not add `dry-run` options to workflows to keep them simple.
