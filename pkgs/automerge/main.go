@@ -850,17 +850,34 @@ type VulnerabilityScanner interface {
 
 type osvScanOutput struct {
 	Results []struct {
+		Source struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
+		} `json:"source"`
 		Packages []struct {
+			Package struct {
+				Name      string `json:"name"`
+				Version   string `json:"version"`
+				Ecosystem string `json:"ecosystem"`
+			} `json:"package"`
 			Vulnerabilities []struct {
-				ID string `json:"id"`
+				ID      string `json:"id"`
+				Summary string `json:"summary"`
 			} `json:"vulnerabilities"`
 		} `json:"packages"`
 	} `json:"results"`
 }
 
+type scanResult struct {
+	ids          []string
+	sourceCount  int
+	packageCount int
+	vulnPackages map[string]string // vuln ID -> "packageName@version"
+}
+
 type OSVScanner struct {
 	baseDir     string
-	baseIDs     []string
+	baseResult  *scanResult
 	baseScanned bool
 }
 
@@ -884,11 +901,11 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 	configFile := resolveOSVConfig(repoDir)
 
 	if !s.baseScanned {
-		ids, err := scanDirectory(ctx, repoDir, configFile)
+		res, err := scanDirectory(ctx, repoDir, configFile)
 		if err != nil {
 			return false, "", fmt.Errorf("osv-scanner failed on base repository: %w", err)
 		}
-		s.baseIDs = ids
+		s.baseResult = res
 		s.baseScanned = true
 	}
 
@@ -908,20 +925,24 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 
 	// Pass configFile from the base repository rather than resolving inside tmpDir,
 	// so a pull request cannot silence its own vulnerabilities by editing osv-scanner.toml.
-	prIDs, err := scanDirectory(ctx, tmpDir, configFile)
+	prRes, err := scanDirectory(ctx, tmpDir, configFile)
 	if err != nil {
 		return false, "", fmt.Errorf("osv-scanner failed on patched PR tree: %w", err)
 	}
 
-	baseSet := make(map[string]bool, len(s.baseIDs))
-	for _, id := range s.baseIDs {
+	baseSet := make(map[string]bool, len(s.baseResult.ids))
+	for _, id := range s.baseResult.ids {
 		baseSet[id] = true
 	}
 
 	var newVulns []string
-	for _, id := range prIDs {
+	for _, id := range prRes.ids {
 		if !baseSet[id] {
-			newVulns = append(newVulns, id)
+			desc := id
+			if pkg := prRes.vulnPackages[id]; pkg != "" {
+				desc = fmt.Sprintf("%s (%s)", id, pkg)
+			}
+			newVulns = append(newVulns, desc)
 		}
 	}
 
@@ -930,7 +951,8 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 		return true, fmt.Sprintf("new vulnerabilities introduced: %s", strings.Join(newVulns, ", ")), nil
 	}
 
-	return false, "no new vulnerabilities introduced", nil
+	return false, fmt.Sprintf("no new vulnerabilities introduced (scanned sources: %d, base vulns: %d, pr vulns: %d)",
+		prRes.sourceCount, len(s.baseResult.ids), len(prRes.ids)), nil
 }
 
 func findRepoRoot(ctx context.Context) (string, error) {
@@ -1008,7 +1030,11 @@ func resolveOSVConfig(trustedBaseDir string) string {
 }
 
 func buildOSVScannerArgs(dir, configFile string) []string {
-	args := []string{"scan", "source", "-r", dir, "--format=json", "--no-call-analysis=go"}
+	// Why --allow-no-lockfiles:
+	// Repositories without lockfiles (such as gem libraries where Gemfile.lock is gitignored)
+	// cause osv-scanner to exit with status 128 ("No package sources found").
+	// Passing --allow-no-lockfiles lets osv-scanner return an empty result with exit status 0.
+	args := []string{"scan", "source", "-r", dir, "--format=json", "--no-call-analysis=go", "--allow-no-lockfiles"}
 	if configFile != "" {
 		args = append(args, "--config="+configFile)
 	} else {
@@ -1019,7 +1045,7 @@ func buildOSVScannerArgs(dir, configFile string) []string {
 	return args
 }
 
-func scanDirectory(ctx context.Context, dir, configFile string) ([]string, error) {
+func scanDirectory(ctx context.Context, dir, configFile string) (*scanResult, error) {
 	args := buildOSVScannerArgs(dir, configFile)
 
 	cmd := exec.CommandContext(ctx, "osv-scanner", args...)
@@ -1038,11 +1064,21 @@ func scanDirectory(ctx context.Context, dir, configFile string) ([]string, error
 	}
 
 	idSet := make(map[string]bool)
+	vulnPackages := make(map[string]string)
+	pkgCount := 0
 	for _, res := range scanOut.Results {
+		pkgCount += len(res.Packages)
 		for _, pkg := range res.Packages {
+			pkgDesc := pkg.Package.Name
+			if pkg.Package.Version != "" {
+				pkgDesc += "@" + pkg.Package.Version
+			}
 			for _, vuln := range pkg.Vulnerabilities {
 				if vuln.ID != "" {
 					idSet[vuln.ID] = true
+					if pkgDesc != "" && vulnPackages[vuln.ID] == "" {
+						vulnPackages[vuln.ID] = pkgDesc
+					}
 				}
 			}
 		}
@@ -1053,7 +1089,12 @@ func scanDirectory(ctx context.Context, dir, configFile string) ([]string, error
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	return ids, nil
+	return &scanResult{
+		ids:          ids,
+		sourceCount:  len(scanOut.Results),
+		packageCount: pkgCount,
+		vulnPackages: vulnPackages,
+	}, nil
 }
 
 const (
@@ -1534,6 +1575,30 @@ func buildStepSummary(results []PRSummaryResult, meta workflowmeta.Metadata) str
 	return sb.String()
 }
 
+func summarizeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	// Why collapse newlines:
+	// Error strings from exec.Command may contain multi-line CLI outputs.
+	// Collapsing multiple whitespace and newlines renders cleanly inside Markdown table cells.
+	return strings.Join(strings.Fields(err.Error()), " ")
+}
+
+func startGroup(title string) {
+	// Why check GITHUB_ACTIONS:
+	// Output group markers only on GitHub Actions runners to avoid noisy markers in local tests or CLI usage.
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
+		fmt.Printf("::group::%s\n", title)
+	}
+}
+
+func endGroup() {
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
+		fmt.Println("::endgroup::")
+	}
+}
+
 func appendFile(path string, content string) error {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -1634,193 +1699,198 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 	}
 
 	for _, item := range eligible {
-		pr := item.pr
-		prSteps := make([]EvaluationStep, len(item.steps))
-		copy(prSteps, item.steps)
+		func() {
+			pr := item.pr
+			startGroup(fmt.Sprintf("PR #%d: %s", pr.Number, pr.Title))
+			defer endGroup()
 
-		diff, err := runner.FetchPRDiff(ctx, pr.Number)
-		if err != nil {
-			fmt.Printf("Warning: failed to fetch diff for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
-			summaries = append(summaries, PRSummaryResult{
-				Number: pr.Number,
-				Title:  pr.Title,
-				Author: pr.Author.Login,
-				Action: ActionSkipped,
-				Source: SourceDiff,
-				Reason: "failed to fetch PR diff",
-			})
-			continue
-		}
+			prSteps := make([]EvaluationStep, len(item.steps))
+			copy(prSteps, item.steps)
 
-		if vulnScanner != nil {
-			fmt.Printf("Running vulnerability diff scan for PR #%d (%s)...\n", pr.Number, pr.Title)
-			veto, reason, err := vulnScanner.ScanPR(ctx, pr, diff)
+			diff, err := runner.FetchPRDiff(ctx, pr.Number)
 			if err != nil {
-				fmt.Printf("Warning: vulnerability scan failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
+				fmt.Printf("Warning: failed to fetch diff for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
 				summaries = append(summaries, PRSummaryResult{
 					Number: pr.Number,
 					Title:  pr.Title,
 					Author: pr.Author.Login,
 					Action: ActionSkipped,
-					Source: SourceVulnerability,
-					Reason: "vulnerability scan failed",
+					Source: SourceDiff,
+					Reason: fmt.Sprintf("failed to fetch PR diff: %s", summarizeError(err)),
 				})
-				continue
+				return
 			}
 
-			if veto {
-				fmt.Printf("PR #%d (%s): VETOED by vulnerability scan: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
-				var commentURL string
-				if !hasLabel(pr, vetoLabelName) {
-					if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
-						fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
-					}
-					if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
-						fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
-					}
-					vetoSteps := append(prSteps, EvaluationStep{
-						Name:    "Vulnerability scan (OSV-Scanner)",
-						Status:  StepFailed,
-						Details: reason,
+			if vulnScanner != nil {
+				fmt.Printf("Running vulnerability diff scan for PR #%d (%s)...\n", pr.Number, pr.Title)
+				veto, reason, err := vulnScanner.ScanPR(ctx, pr, diff)
+				if err != nil {
+					fmt.Printf("Warning: vulnerability scan failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
+					summaries = append(summaries, PRSummaryResult{
+						Number: pr.Number,
+						Title:  pr.Title,
+						Author: pr.Author.Login,
+						Action: ActionSkipped,
+						Source: SourceVulnerability,
+						Reason: fmt.Sprintf("vulnerability scan failed: %s", summarizeError(err)),
 					})
-					fullSteps := completeSkippedSteps(vetoSteps, cfg)
-					commentBody := fmt.Sprintf("Automerge was vetoed by vulnerability scan: %s. Marking with `%s`.\n\nAs long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after resolving the vulnerability or pushing new commits.\n\n%s\n%s",
-						reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
-					var err error
-					commentURL, err = runner.CommentPR(ctx, pr.Number, commentBody)
-					if err != nil {
-						fmt.Printf("Warning: failed to comment on vetoed PR #%d: %v\n", pr.Number, err)
+					return
+				}
+
+				if veto {
+					fmt.Printf("PR #%d (%s): VETOED by vulnerability scan: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
+					var commentURL string
+					if !hasLabel(pr, vetoLabelName) {
+						if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
+							fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
+						}
+						if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
+							fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
+						}
+						vetoSteps := append(prSteps, EvaluationStep{
+							Name:    "Vulnerability scan (OSV-Scanner)",
+							Status:  StepFailed,
+							Details: reason,
+						})
+						fullSteps := completeSkippedSteps(vetoSteps, cfg)
+						commentBody := fmt.Sprintf("Automerge was vetoed by vulnerability scan: %s. Marking with `%s`.\n\nAs long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after resolving the vulnerability or pushing new commits.\n\n%s\n%s",
+							reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
+						var err error
+						commentURL, err = runner.CommentPR(ctx, pr.Number, commentBody)
+						if err != nil {
+							fmt.Printf("Warning: failed to comment on vetoed PR #%d: %v\n", pr.Number, err)
+						}
 					}
+					summaries = append(summaries, PRSummaryResult{
+						Number:     pr.Number,
+						Title:      pr.Title,
+						Author:     pr.Author.Login,
+						Action:     ActionVetoed,
+						Source:     SourceVulnerability,
+						Reason:     fmt.Sprintf("vulnerability scan: %s", reason),
+						CommentURL: commentURL,
+					})
+					return
+				}
+
+				fmt.Printf("PR #%d (%s): vulnerability scan passed: %s.\n", pr.Number, pr.Title, reason)
+				prSteps = append(prSteps, EvaluationStep{
+					Name:    "Vulnerability scan (OSV-Scanner)",
+					Status:  StepPassed,
+					Details: reason,
+				})
+			}
+
+			if cfg.LLMVeto {
+				if cfg.GeminiAPIKey == "" {
+					fmt.Printf("Warning: llm-veto is enabled, but GEMINI_API_KEY is not set. Skipping merge for PR #%d to avoid unreviewed merges.\n", pr.Number)
+					summaries = append(summaries, PRSummaryResult{
+						Number: pr.Number,
+						Title:  pr.Title,
+						Author: pr.Author.Login,
+						Action: ActionSkipped,
+						Source: SourceLLMVeto,
+						Reason: "GEMINI_API_KEY is not set",
+					})
+					return
+				}
+
+				fmt.Printf("Running LLM veto for PR #%d (%s)...\n", pr.Number, pr.Title)
+				veto, reason, err := reviewer.ReviewPR(ctx, pr, diff)
+				if err != nil {
+					fmt.Printf("Warning: LLM veto failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
+					summaries = append(summaries, PRSummaryResult{
+						Number: pr.Number,
+						Title:  pr.Title,
+						Author: pr.Author.Login,
+						Action: ActionSkipped,
+						Source: SourceLLMVeto,
+						Reason: fmt.Sprintf("LLM veto failed: %s", summarizeError(err)),
+					})
+					return
+				}
+
+				if veto {
+					fmt.Printf("PR #%d (%s): VETOED by LLM veto: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
+					var commentURL string
+					if !hasLabel(pr, vetoLabelName) {
+						if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
+							fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
+						}
+						if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
+							fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
+						}
+						vetoSteps := append(prSteps, EvaluationStep{
+							Name:    "LLM veto",
+							Status:  StepFailed,
+							Details: reason,
+						})
+						fullSteps := completeSkippedSteps(vetoSteps, cfg)
+						commentBody := fmt.Sprintf("Automerge was vetoed by LLM veto: %s. Marking with `%s`.\n\nAs long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after updating the review bot or pushing new commits.\n\n%s\n%s",
+							reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
+						var err error
+						commentURL, err = runner.CommentPR(ctx, pr.Number, commentBody)
+						if err != nil {
+							fmt.Printf("Warning: failed to comment on vetoed PR #%d: %v\n", pr.Number, err)
+						}
+					}
+					summaries = append(summaries, PRSummaryResult{
+						Number:     pr.Number,
+						Title:      pr.Title,
+						Author:     pr.Author.Login,
+						Action:     ActionVetoed,
+						Source:     SourceLLMVeto,
+						Reason:     fmt.Sprintf("LLM veto: %s", reason),
+						CommentURL: commentURL,
+					})
+					return
+				}
+
+				fmt.Printf("PR #%d (%s): LLM veto passed: no risks detected (%s). Proceeding to merge.\n", pr.Number, pr.Title, reason)
+				prSteps = append(prSteps, EvaluationStep{
+					Name:    "LLM veto",
+					Status:  StepPassed,
+					Details: "no risks detected",
+				})
+			}
+
+			fmt.Printf("Attempting to merge PR #%d (%s)...\n", pr.Number, pr.Title)
+			if err := runner.MergePR(ctx, pr.Number, cfg.MergeMethod); err != nil {
+				fmt.Printf("Failed to merge PR #%d (possibly conflicting with a prior merge). Skipping for next run: %v\n", pr.Number, err)
+				summaries = append(summaries, PRSummaryResult{
+					Number: pr.Number,
+					Title:  pr.Title,
+					Author: pr.Author.Login,
+					Action: ActionSkipped,
+					Source: SourceMerge,
+					Reason: fmt.Sprintf("merge failed: %s", summarizeError(err)),
+				})
+			} else {
+				fmt.Printf("Successfully merged PR #%d.\n", pr.Number)
+				prSteps = append(prSteps, EvaluationStep{
+					Name:    "Merge PR",
+					Status:  StepPassed,
+					Details: cfg.MergeMethod,
+				})
+				// Post comment after successful merge rather than before, because without merge queues,
+				// a merge attempt can fail due to race conditions or conflicts.
+				commentBody := fmt.Sprintf("Merged automatically.\n\n%s\n%s",
+					formatEvaluationSteps(prSteps), meta.ProvenanceText("Merged automatically"))
+				commentURL, err := runner.CommentPR(ctx, pr.Number, commentBody)
+				if err != nil {
+					fmt.Printf("Warning: failed to post merge comment for PR #%d: %v\n", pr.Number, err)
 				}
 				summaries = append(summaries, PRSummaryResult{
 					Number:     pr.Number,
 					Title:      pr.Title,
 					Author:     pr.Author.Login,
-					Action:     ActionVetoed,
-					Source:     SourceVulnerability,
-					Reason:     fmt.Sprintf("vulnerability scan: %s", reason),
+					Action:     ActionMerged,
+					Source:     SourceMerge,
+					Reason:     "merged successfully",
 					CommentURL: commentURL,
 				})
-				continue
 			}
-
-			fmt.Printf("PR #%d (%s): vulnerability scan passed: %s.\n", pr.Number, pr.Title, reason)
-			prSteps = append(prSteps, EvaluationStep{
-				Name:    "Vulnerability scan (OSV-Scanner)",
-				Status:  StepPassed,
-				Details: reason,
-			})
-		}
-
-		if cfg.LLMVeto {
-			if cfg.GeminiAPIKey == "" {
-				fmt.Printf("Warning: llm-veto is enabled, but GEMINI_API_KEY is not set. Skipping merge for PR #%d to avoid unreviewed merges.\n", pr.Number)
-				summaries = append(summaries, PRSummaryResult{
-					Number: pr.Number,
-					Title:  pr.Title,
-					Author: pr.Author.Login,
-					Action: ActionSkipped,
-					Source: SourceLLMVeto,
-					Reason: "GEMINI_API_KEY is not set",
-				})
-				continue
-			}
-
-			fmt.Printf("Running LLM veto for PR #%d (%s)...\n", pr.Number, pr.Title)
-			veto, reason, err := reviewer.ReviewPR(ctx, pr, diff)
-			if err != nil {
-				fmt.Printf("Warning: LLM veto failed for PR #%d (%v). Skipping merge for next run.\n", pr.Number, err)
-				summaries = append(summaries, PRSummaryResult{
-					Number: pr.Number,
-					Title:  pr.Title,
-					Author: pr.Author.Login,
-					Action: ActionSkipped,
-					Source: SourceLLMVeto,
-					Reason: "LLM veto failed",
-				})
-				continue
-			}
-
-			if veto {
-				fmt.Printf("PR #%d (%s): VETOED by LLM veto: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
-				var commentURL string
-				if !hasLabel(pr, vetoLabelName) {
-					if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
-						fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
-					}
-					if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
-						fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
-					}
-					vetoSteps := append(prSteps, EvaluationStep{
-						Name:    "LLM veto",
-						Status:  StepFailed,
-						Details: reason,
-					})
-					fullSteps := completeSkippedSteps(vetoSteps, cfg)
-					commentBody := fmt.Sprintf("Automerge was vetoed by LLM veto: %s. Marking with `%s`.\n\nAs long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after updating the review bot or pushing new commits.\n\n%s\n%s",
-						reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
-					var err error
-					commentURL, err = runner.CommentPR(ctx, pr.Number, commentBody)
-					if err != nil {
-						fmt.Printf("Warning: failed to comment on vetoed PR #%d: %v\n", pr.Number, err)
-					}
-				}
-				summaries = append(summaries, PRSummaryResult{
-					Number:     pr.Number,
-					Title:      pr.Title,
-					Author:     pr.Author.Login,
-					Action:     ActionVetoed,
-					Source:     SourceLLMVeto,
-					Reason:     fmt.Sprintf("LLM veto: %s", reason),
-					CommentURL: commentURL,
-				})
-				continue
-			}
-
-			fmt.Printf("PR #%d (%s): LLM veto passed: no risks detected (%s). Proceeding to merge.\n", pr.Number, pr.Title, reason)
-			prSteps = append(prSteps, EvaluationStep{
-				Name:    "LLM veto",
-				Status:  StepPassed,
-				Details: "no risks detected",
-			})
-		}
-
-		fmt.Printf("Attempting to merge PR #%d (%s)...\n", pr.Number, pr.Title)
-		if err := runner.MergePR(ctx, pr.Number, cfg.MergeMethod); err != nil {
-			fmt.Printf("Failed to merge PR #%d (possibly conflicting with a prior merge). Skipping for next run: %v\n", pr.Number, err)
-			summaries = append(summaries, PRSummaryResult{
-				Number: pr.Number,
-				Title:  pr.Title,
-				Author: pr.Author.Login,
-				Action: ActionSkipped,
-				Source: SourceMerge,
-				Reason: "merge failed (possible conflict)",
-			})
-		} else {
-			fmt.Printf("Successfully merged PR #%d.\n", pr.Number)
-			prSteps = append(prSteps, EvaluationStep{
-				Name:    "Merge PR",
-				Status:  StepPassed,
-				Details: cfg.MergeMethod,
-			})
-			// Post comment after successful merge rather than before, because without merge queues,
-			// a merge attempt can fail due to race conditions or conflicts.
-			commentBody := fmt.Sprintf("Merged automatically.\n\n%s\n%s",
-				formatEvaluationSteps(prSteps), meta.ProvenanceText("Merged automatically"))
-			commentURL, err := runner.CommentPR(ctx, pr.Number, commentBody)
-			if err != nil {
-				fmt.Printf("Warning: failed to post merge comment for PR #%d: %v\n", pr.Number, err)
-			}
-			summaries = append(summaries, PRSummaryResult{
-				Number:     pr.Number,
-				Title:      pr.Title,
-				Author:     pr.Author.Login,
-				Action:     ActionMerged,
-				Source:     SourceMerge,
-				Reason:     "merged successfully",
-				CommentURL: commentURL,
-			})
-		}
+		}()
 	}
 
 	return nil

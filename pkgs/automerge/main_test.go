@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1443,6 +1444,9 @@ func TestResolveOSVConfigIgnoresPatchedTree(t *testing.T) {
 	}
 
 	argsWithoutBaseConfig := buildOSVScannerArgs(patchedDir, resolved)
+	if !slices.Contains(argsWithoutBaseConfig, "--allow-no-lockfiles") {
+		t.Errorf("expected --allow-no-lockfiles in args, got %v", argsWithoutBaseConfig)
+	}
 	if !slices.Contains(argsWithoutBaseConfig, "--config="+os.DevNull) {
 		t.Errorf("expected --config=%s when baseDir has no config, got %v", os.DevNull, argsWithoutBaseConfig)
 	}
@@ -1461,12 +1465,19 @@ func TestResolveOSVConfigIgnoresPatchedTree(t *testing.T) {
 	}
 
 	argsWithBaseConfig := buildOSVScannerArgs(patchedDir, resolvedTrusted)
+	if !slices.Contains(argsWithBaseConfig, "--allow-no-lockfiles") {
+		t.Errorf("expected --allow-no-lockfiles in args, got %v", argsWithBaseConfig)
+	}
 	if !slices.Contains(argsWithBaseConfig, "--config="+trustedConfig) {
 		t.Errorf("expected --config=%s when scanning patchedDir, got %v", trustedConfig, argsWithBaseConfig)
 	}
 }
 
 func TestExecuteVulnerabilityScan(t *testing.T) {
+	tmpDir := t.TempDir()
+	summaryFile := filepath.Join(tmpDir, "step_summary.md")
+	t.Setenv("GITHUB_STEP_SUMMARY", summaryFile)
+
 	validChecks := []StatusCheckItem{
 		{Status: "COMPLETED", Conclusion: "SUCCESS"},
 	}
@@ -1551,6 +1562,15 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 	// 402 must be labeled with vetoLabelName
 	if !slices.Equal(runner.addedLabels[402], []string{vetoLabelName}) {
 		t.Errorf("expected PR 402 to have veto label %v, got %v", []string{vetoLabelName}, runner.addedLabels[402])
+	}
+
+	summaryBytes, err := os.ReadFile(summaryFile)
+	if err != nil {
+		t.Fatalf("failed to read step summary: %v", err)
+	}
+	summaryStr := string(summaryBytes)
+	if !strings.Contains(summaryStr, "vulnerability scan failed: simulated scanner failure") {
+		t.Errorf("expected summary to contain specific error reason, got:\n%s", summaryStr)
 	}
 }
 
@@ -2078,5 +2098,78 @@ func TestReasonDocsExist(t *testing.T) {
 		if info.Size() == 0 {
 			t.Errorf("reason doc %q is empty", doc)
 		}
+	}
+}
+
+func TestExecuteLogGrouping(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+
+	validChecks := []StatusCheckItem{
+		{Status: "COMPLETED", Conclusion: "SUCCESS"},
+	}
+
+	runner := &mockRunner{
+		prs: []PullRequest{
+			{
+				Number:            901,
+				Title:             "Grouped bot PR",
+				Body:              validRenovateBody,
+				Author:            Author{Login: "renovate[bot]"},
+				Mergeable:         "MERGEABLE",
+				StatusCheckRollup: validChecks,
+			},
+		},
+	}
+
+	cfg := &Config{
+		AllowedBots: defaultAllowedBots,
+		MergeMethod: "squash",
+	}
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	os.Stdout = w
+
+	execErr := execute(context.Background(), cfg, runner, nil, nil, workflowmeta.Metadata{})
+	w.Close()
+	os.Stdout = oldStdout
+
+	if execErr != nil {
+		t.Fatalf("unexpected error: %v", execErr)
+	}
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("failed to read captured stdout: %v", err)
+	}
+	output := buf.String()
+
+	expectedGroup := "::group::PR #901: Grouped bot PR\n"
+	if !strings.Contains(output, expectedGroup) {
+		t.Errorf("expected output to contain %q, got:\n%s", expectedGroup, output)
+	}
+	if !strings.Contains(output, "::endgroup::\n") {
+		t.Errorf("expected output to contain endgroup marker, got:\n%s", output)
+	}
+}
+
+func TestScanDirectoryWithoutLockfiles(t *testing.T) {
+	if _, err := exec.LookPath("osv-scanner"); err != nil {
+		t.Skip("osv-scanner binary not available in PATH, skipping live scan test")
+	}
+
+	emptyDir := t.TempDir()
+	res, err := scanDirectory(context.Background(), emptyDir, "")
+	if err != nil {
+		t.Fatalf("expected scanDirectory to succeed on directory without lockfiles, got error: %v", err)
+	}
+	if res.sourceCount != 0 {
+		t.Errorf("expected 0 sources scanned, got %d", res.sourceCount)
+	}
+	if len(res.ids) != 0 {
+		t.Errorf("expected 0 vulnerability IDs, got %v", res.ids)
 	}
 }
