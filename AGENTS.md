@@ -13,3 +13,8 @@
 - `pkgs/<name>/README.md`: Workflow-specific details and instructions that are not constantly needed in the root `README.md`.
 - `NOTES.md`: Repository-wide topics; separate desired requirements and priorities in upper sections from current choices driven by technical constraints in lower sections.
 - `AGENTS.md`: Maintainer preferences and common LLM pitfalls; keep every item concise.
+
+## Ecosystem & Language Priorities
+
+- Keep workflows and tools general across ecosystems, but ensure compatibility and prioritize test cases in this order: `nix`, `go`, `rust`, `gha`, `typescript`, `shellscript`, `ruby`, `python` (`nix` and `go` take top priority).
+- When integrating dependency checks or tools like `osv-scanner`, keep ecosystem limits in mind (e.g., `flake.lock` is not supported directly by `osv-scanner`) and consider lockfiles in the priority order above instead of testing every pattern.
