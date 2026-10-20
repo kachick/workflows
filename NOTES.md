@@ -18,10 +18,8 @@
 
 ### Why not `workflow_run` for automerge and bot sweeps
 
-- While `workflow_run` runs in the trusted default branch context with access to repository secrets, periodic sweeps are preferred for automerge and bot maintenance:
-  - **Single-workflow limitation**: `workflow_run` triggers only after a single named workflow completes. When a repository runs multiple CI workflows (such as Go tests and Nix checks), waiting for all checks to finish requires complex API polling.
-  - **Race conditions from batch PRs**: Bots like Dependabot or Renovate often open multiple pull requests at once. Merging one PR immediately triggers re-runs and rebase conflicts on others. Periodic polling processes PRs in a stable sequence without churn.
-  - **Runner and quota efficiency**: Periodic sweeps batch operations together, avoiding runner overhead and saving LLM API limits (for LLM veto reviews) compared to firing separate runs for every pull request event.
+- Like `pull_request_target`, `workflow_run` on pull request events is [dangerous](https://docs.zizmor.sh/audits/#dangerous-triggers). Do not use it.
+- Use periodic polling instead to never run workflows with secrets on pull requests.
 
 ### Workflows write permission trade-off
 
