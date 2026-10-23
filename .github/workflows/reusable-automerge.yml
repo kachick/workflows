@@ -27,6 +27,16 @@ on:
         required: false
         type: string
         default: 'gemini-flash-latest'
+      reviewer:
+        description: 'GitHub login to request review on veto or block'
+        required: false
+        type: string
+        # Why not automatic repo owner:
+        # GitHub API requested_reviewers accepts only individual user logins or team slugs, not generic roles like 'admin'.
+        # Repository owners can also be organizations which cannot be directly requested as reviewers.
+        # Because this workflow is specialized for personal use (guarded by kachick ownership above),
+        # defaulting to 'kachick' is the simplest choice without fragile dynamic collaborator lookups.
+        default: 'kachick'
     secrets:
       APP_PRIVATE_KEY:
         description: 'GitHub App private key'
@@ -80,6 +90,7 @@ jobs:
           LLM_VETO: ${{ inputs.llm-veto }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ inputs.gemini-model }}
+          REVIEWER: ${{ inputs.reviewer }}
         run: |
           set -euo pipefail
 
@@ -94,4 +105,5 @@ jobs:
             --merge-method="${MERGE_METHOD}" \
             --allowed-bots="${ALLOWED_BOTS}" \
             --llm-veto="${LLM_VETO}" \
-            --gemini-model="${GEMINI_MODEL}"
+            --gemini-model="${GEMINI_MODEL}" \
+            --reviewer="${REVIEWER}"

@@ -42,6 +42,9 @@ func TestParseConfigDefaults(t *testing.T) {
 	if cfg.GeminiModel != "gemini-flash-latest" {
 		t.Errorf("expected default gemini-model 'gemini-flash-latest', got %q", cfg.GeminiModel)
 	}
+	if cfg.Reviewer != "" {
+		t.Errorf("expected default reviewer empty, got %q", cfg.Reviewer)
+	}
 }
 
 func TestParseConfigFlags(t *testing.T) {
@@ -51,6 +54,7 @@ func TestParseConfigFlags(t *testing.T) {
 		"--llm-veto=true",
 		"--gemini-api-key=test-key",
 		"--gemini-model=custom-model",
+		"--reviewer=custom-reviewer",
 	}
 
 	cfg, err := parseConfig(args)
@@ -74,6 +78,9 @@ func TestParseConfigFlags(t *testing.T) {
 	if cfg.GeminiModel != "custom-model" {
 		t.Errorf("expected gemini-model 'custom-model', got %q", cfg.GeminiModel)
 	}
+	if cfg.Reviewer != "custom-reviewer" {
+		t.Errorf("expected reviewer 'custom-reviewer', got %q", cfg.Reviewer)
+	}
 }
 
 func TestParseConfigInvalidMethod(t *testing.T) {
@@ -89,6 +96,7 @@ func TestParseConfigEnvFallback(t *testing.T) {
 	t.Setenv("LLM_VETO", "true")
 	t.Setenv("GEMINI_API_KEY", "env-api-key")
 	t.Setenv("GEMINI_MODEL", "env-model")
+	t.Setenv("REVIEWER", "env-reviewer")
 
 	cfg, err := parseConfig([]string{})
 	if err != nil {
@@ -110,6 +118,9 @@ func TestParseConfigEnvFallback(t *testing.T) {
 	}
 	if cfg.GeminiModel != "env-model" {
 		t.Errorf("expected gemini-model from env, got %q", cfg.GeminiModel)
+	}
+	if cfg.Reviewer != "env-reviewer" {
+		t.Errorf("expected reviewer from env, got %q", cfg.Reviewer)
 	}
 }
 
@@ -344,21 +355,23 @@ func TestIsEligible(t *testing.T) {
 }
 
 type mockRunner struct {
-	prs                 []PullRequest
-	fetchPRResponses    map[int][]*PullRequest
-	fetchPRErrOn        map[int]error
-	fetchPRCalls        map[int]int
-	diffs               map[int]string
-	fetchErr            error
-	diffErrOn           map[int]error
-	ensuredLabels       []string
-	addedLabels         map[int][]string
-	mergedPRs           []int
-	mergeErrOn          map[int]error
-	comments            map[int][]string
-	commentErrOn        map[int]error
-	requestedChanges    map[int][]string
-	requestChangesErrOn map[int]error
+	prs                  []PullRequest
+	fetchPRResponses     map[int][]*PullRequest
+	fetchPRErrOn         map[int]error
+	fetchPRCalls         map[int]int
+	diffs                map[int]string
+	fetchErr             error
+	diffErrOn            map[int]error
+	ensuredLabels        []string
+	addedLabels          map[int][]string
+	mergedPRs            []int
+	mergeErrOn           map[int]error
+	comments             map[int][]string
+	commentErrOn         map[int]error
+	requestedChanges     map[int][]string
+	requestChangesErrOn  map[int]error
+	requestedReviewers   map[int][]string
+	requestReviewerErrOn map[int]error
 }
 
 func (m *mockRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest, error) {
@@ -447,6 +460,17 @@ func (m *mockRunner) RequestChangesPR(ctx context.Context, number int, body stri
 	return nil
 }
 
+func (m *mockRunner) RequestReviewer(ctx context.Context, number int, reviewer string) error {
+	if err, ok := m.requestReviewerErrOn[number]; ok {
+		return err
+	}
+	if m.requestedReviewers == nil {
+		m.requestedReviewers = make(map[int][]string)
+	}
+	m.requestedReviewers[number] = append(m.requestedReviewers[number], reviewer)
+	return nil
+}
+
 type mockReviewer struct {
 	reviews    map[int]vetoDecision
 	reviewErrs map[int]error
@@ -527,6 +551,7 @@ func TestExecute(t *testing.T) {
 	cfg := &Config{
 		AllowedBots: defaultAllowedBots,
 		MergeMethod: "squash",
+		Reviewer:    "kachick",
 	}
 
 	err := execute(context.Background(), cfg, runner, nil, nil, workflowmeta.Metadata{})
@@ -612,6 +637,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 		LLMVeto:      true,
 		GeminiAPIKey: "dummy-key",
 		GeminiModel:  "gemini-3.8-flash",
+		Reviewer:     "kachick",
 	}
 
 	err := execute(context.Background(), cfg, runner, reviewer, nil, workflowmeta.Metadata{})
@@ -664,6 +690,12 @@ func TestExecuteLLMVeto(t *testing.T) {
 	}
 	if !strings.Contains(runner.requestedChanges[202][0], "This review may block merging if the repository requires review approvals. If you still want to merge this pull request, please dismiss this review.") {
 		t.Errorf("expected PR 202 requested changes to contain dismissal guidance, got %q", runner.requestedChanges[202][0])
+	}
+	if !slices.Equal(runner.requestedReviewers[202], []string{"kachick"}) {
+		t.Errorf("expected PR 202 to have reviewer kachick, got %v", runner.requestedReviewers[202])
+	}
+	if len(runner.requestedReviewers[201]) != 0 {
+		t.Errorf("expected no reviewer requested on merged PR 201, got %v", runner.requestedReviewers[201])
 	}
 
 	// Subsequent runs must skip already vetoed PRs without calling reviewer or spending tokens
@@ -1569,6 +1601,7 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 		GeminiAPIKey: "dummy-key",
 		GeminiModel:  "gemini-flash-latest",
 		OSVScanner:   true,
+		Reviewer:     "kachick",
 	}
 
 	err := execute(context.Background(), cfg, runner, reviewer, vulnScanner, workflowmeta.Metadata{})
@@ -1616,6 +1649,12 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 	}
 	if !strings.Contains(runner.requestedChanges[402][0], "This review may block merging if the repository requires review approvals. If you still want to merge this pull request, please dismiss this review.") {
 		t.Errorf("expected PR 402 requested changes to contain dismissal guidance, got %q", runner.requestedChanges[402][0])
+	}
+	if !slices.Equal(runner.requestedReviewers[402], []string{"kachick"}) {
+		t.Errorf("expected PR 402 to have reviewer kachick, got %v", runner.requestedReviewers[402])
+	}
+	if len(runner.requestedReviewers[401]) != 0 {
+		t.Errorf("expected no reviewer requested on merged PR 401, got %v", runner.requestedReviewers[401])
 	}
 
 	summaryBytes, err := os.ReadFile(summaryFile)
@@ -1690,6 +1729,7 @@ func TestExecutePostsMergeComment(t *testing.T) {
 	cfg := &Config{
 		AllowedBots: defaultAllowedBots,
 		MergeMethod: "squash",
+		Reviewer:    "kachick",
 	}
 
 	meta := workflowmeta.Metadata{
@@ -1762,6 +1802,7 @@ func TestExecuteLabelsBlockedPR(t *testing.T) {
 	cfg := &Config{
 		AllowedBots: defaultAllowedBots,
 		MergeMethod: "squash",
+		Reviewer:    "kachick",
 	}
 
 	meta := workflowmeta.Metadata{
@@ -1797,6 +1838,9 @@ func TestExecuteLabelsBlockedPR(t *testing.T) {
 	if !strings.Contains(runner.requestedChanges[601][0], "This review may block merging if the repository requires review approvals. If you still want to merge this pull request, please dismiss this review.") {
 		t.Errorf("expected requested changes on 601 to include dismissal guidance, got %q", runner.requestedChanges[601][0])
 	}
+	if !slices.Equal(runner.requestedReviewers[601], []string{"kachick"}) {
+		t.Errorf("expected PR 601 to have reviewer kachick, got %v", runner.requestedReviewers[601])
+	}
 
 	// 602 was already labeled, so AddLabelToPR and RequestChangesPR must NOT be called again
 	if len(runner.addedLabels[602]) != 0 {
@@ -1805,6 +1849,9 @@ func TestExecuteLabelsBlockedPR(t *testing.T) {
 	if len(runner.requestedChanges[602]) != 0 {
 		t.Errorf("expected no requested changes on PR 602, got %v", runner.requestedChanges[602])
 	}
+	if len(runner.requestedReviewers[602]) != 0 {
+		t.Errorf("expected no requested reviewers on PR 602, got %v", runner.requestedReviewers[602])
+	}
 
 	// 603 is a draft, so it must NOT be labeled as blocked
 	if len(runner.addedLabels[603]) != 0 {
@@ -1812,6 +1859,9 @@ func TestExecuteLabelsBlockedPR(t *testing.T) {
 	}
 	if len(runner.requestedChanges[603]) != 0 {
 		t.Errorf("expected no requested changes on draft PR 603, got %v", runner.requestedChanges[603])
+	}
+	if len(runner.requestedReviewers[603]) != 0 {
+		t.Errorf("expected no requested reviewers on draft PR 603, got %v", runner.requestedReviewers[603])
 	}
 }
 
@@ -2000,6 +2050,7 @@ func TestExecuteWritesStepSummary(t *testing.T) {
 	cfg := &Config{
 		AllowedBots: defaultAllowedBots,
 		MergeMethod: "squash",
+		Reviewer:    "kachick",
 	}
 
 	meta := workflowmeta.Metadata{
@@ -2201,6 +2252,7 @@ func TestExecuteLogGrouping(t *testing.T) {
 	cfg := &Config{
 		AllowedBots: defaultAllowedBots,
 		MergeMethod: "squash",
+		Reviewer:    "kachick",
 	}
 
 	oldStdout := os.Stdout

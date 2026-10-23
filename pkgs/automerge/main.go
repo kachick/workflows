@@ -142,6 +142,7 @@ type Config struct {
 	GeminiAPIKey string
 	GeminiModel  string
 	OSVScanner   bool
+	Reviewer     string
 }
 
 type CommandRunner interface {
@@ -153,6 +154,7 @@ type CommandRunner interface {
 	MergePR(ctx context.Context, number int, method string) error
 	CommentPR(ctx context.Context, number int, body string) (string, error)
 	RequestChangesPR(ctx context.Context, number int, body string) error
+	RequestReviewer(ctx context.Context, number int, reviewer string) error
 }
 
 type DefaultCommandRunner struct{}
@@ -265,6 +267,15 @@ func (r *DefaultCommandRunner) RequestChangesPR(ctx context.Context, number int,
 	return cmd.Run()
 }
 
+func (r *DefaultCommandRunner) RequestReviewer(ctx context.Context, number int, reviewer string) error {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "edit", strconv.Itoa(number),
+		"--add-reviewer", reviewer,
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 func parseAllowedBots(input string) []string {
 	if strings.TrimSpace(input) == "" {
 		return defaultAllowedBots
@@ -296,6 +307,7 @@ func parseConfig(args []string) (*Config, error) {
 	fs.StringVar(&cfg.GeminiAPIKey, "gemini-api-key", "", "Gemini API key for LLM veto")
 	fs.StringVar(&cfg.GeminiModel, "gemini-model", "gemini-flash-latest", "Gemini model name for LLM veto")
 	fs.BoolVar(&cfg.OSVScanner, "osv-scanner", true, "Enable OSV-Scanner diff check before merging")
+	fs.StringVar(&cfg.Reviewer, "reviewer", "", "GitHub login to request review on veto or block")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -322,6 +334,9 @@ func parseConfig(args []string) (*Config, error) {
 		if val, err := strconv.ParseBool(env); err == nil {
 			cfg.OSVScanner = val
 		}
+	}
+	if env := os.Getenv("REVIEWER"); env != "" && cfg.Reviewer == "" {
+		cfg.Reviewer = env
 	}
 
 	validMethods := map[string]bool{"squash": true, "merge": true, "rebase": true}
@@ -1686,6 +1701,11 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					if err := runner.AddLabelToPR(ctx, pr.Number, blockedLabelName); err != nil {
 						fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", blockedLabelName, pr.Number, err)
 					}
+					if cfg.Reviewer != "" {
+						if err := runner.RequestReviewer(ctx, pr.Number, cfg.Reviewer); err != nil {
+							fmt.Printf("Warning: failed to request reviewer %q for PR #%d: %v\n", cfg.Reviewer, pr.Number, err)
+						}
+					}
 					// Why not runner.CommentPR:
 					// Requesting changes posts a review with the explanation while changing the pull request review state.
 					// Posting both an issue comment and a review would create duplicate notifications and clutter the timeline.
@@ -1772,6 +1792,11 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 						if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
 							fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
 						}
+						if cfg.Reviewer != "" {
+							if err := runner.RequestReviewer(ctx, pr.Number, cfg.Reviewer); err != nil {
+								fmt.Printf("Warning: failed to request reviewer %q for PR #%d: %v\n", cfg.Reviewer, pr.Number, err)
+							}
+						}
 						vetoSteps := append(prSteps, EvaluationStep{
 							Name:    "Vulnerability scan (OSV-Scanner)",
 							Status:  StepFailed,
@@ -1854,6 +1879,11 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 						}
 						if err := runner.AddLabelToPR(ctx, pr.Number, vetoLabelName); err != nil {
 							fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", vetoLabelName, pr.Number, err)
+						}
+						if cfg.Reviewer != "" {
+							if err := runner.RequestReviewer(ctx, pr.Number, cfg.Reviewer); err != nil {
+								fmt.Printf("Warning: failed to request reviewer %q for PR #%d: %v\n", cfg.Reviewer, pr.Number, err)
+							}
 						}
 						vetoSteps := append(prSteps, EvaluationStep{
 							Name:    "LLM veto",
