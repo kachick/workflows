@@ -6,3 +6,6 @@
   - Transition caller repositories from tracking relaxed revisions (`@main`) to pinned releases or tags to reduce supply chain risks when reusable workflows change.
 - **Evaluate Socket.dev integration**:
   - Evaluate adding Socket.dev (Socket for GitHub) to catch unexpected upstream behavior (eval, install scripts, network access) in dependency updates, while balancing the risk of granting permissions to an external GitHub App.
+- **Evaluate `numtide/iets` for faster Nix workflows**:
+  - Track `numtide/iets` as a fast Nix CLI replacement (e.g. `iets diff` for closure/derivation differences, fast eval, built-in prefetch).
+  - Consider trying it when it matures or becomes available in `nixpkgs`.
