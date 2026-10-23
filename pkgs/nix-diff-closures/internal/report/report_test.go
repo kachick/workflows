@@ -113,8 +113,37 @@ func TestBuildReport(t *testing.T) {
 		if !strings.Contains(rep.CommentMarkdown, diffText) {
 			t.Fatal("diff text not found in comment")
 		}
+		expectedArtifactLink := "https://github.com/kachick/workflows/actions/runs/12345678#artifacts"
+		if !strings.Contains(rep.CommentMarkdown, expectedArtifactLink) {
+			t.Fatalf("expected artifact link %q in comment, got: %s", expectedArtifactLink, rep.CommentMarkdown)
+		}
 		if rep.IsTruncated {
 			t.Fatal("expected IsTruncated = false")
+		}
+	})
+
+	t.Run("collects full tree and why-depends texts", func(t *testing.T) {
+		results := []TargetResult{
+			{
+				Target:         "devShells.x86_64-linux.default",
+				DiffText:       "bash: 5.2 → 5.3\n",
+				TreeText:       "/nix/store/111-drv\n└───/nix/store/222-bash.drv\n",
+				WhyDependsText: "# why-depends for bash (5.3)\n/nix/store/111-drv -> /nix/store/222-bash.drv\n",
+			},
+		}
+
+		rep, err := Build(results, VulnerabilityResult{}, 1000, 500, completeMeta, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(rep.FullTreeText, "=== Target: devShells.x86_64-linux.default ===") {
+			t.Fatalf("target header missing in tree text: %s", rep.FullTreeText)
+		}
+		if !strings.Contains(rep.FullTreeText, "/nix/store/222-bash.drv") {
+			t.Fatalf("tree content missing: %s", rep.FullTreeText)
+		}
+		if !strings.Contains(rep.FullWhyDependsText, "# why-depends for bash (5.3)") {
+			t.Fatalf("why-depends content missing: %s", rep.FullWhyDependsText)
 		}
 	})
 

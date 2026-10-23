@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -133,12 +134,97 @@ func (e *Engine) diffTarget(ctx context.Context, baseRev string, target string) 
 		}
 	}
 
+	treeOut, _ := e.Exec.Run(ctx, "nix-store", "--query", "--tree", headDrv)
+	whyDependsOut := e.computeWhyDepends(ctx, headDrv, diffOut)
+
 	return report.TargetResult{
-		Target:   target,
-		BaseDrv:  baseDrv,
-		HeadDrv:  headDrv,
-		DiffText: diffOut,
+		Target:         target,
+		BaseDrv:        baseDrv,
+		HeadDrv:        headDrv,
+		DiffText:       diffOut,
+		TreeText:       treeOut,
+		WhyDependsText: whyDependsOut,
 	}
+}
+
+// Why query why-depends only for updated packages found in diff-closures?
+//
+// Running `nix why-depends` is essentially an N+1 operation against subprocesses.
+// A raw derivation closure can contain thousands of internal `.drv` nodes.
+// Running why-depends for every single `.drv` node would easily time out the CI job.
+//
+// By filtering to packages summarized in `diff-closures`, we keep the command count
+// to a small number of packages, finishing in a reasonable time.
+// For any dependencies not listed, `tree.txt` (a single O(1) command) gives
+// the full dependency tree.
+func (e *Engine) computeWhyDepends(ctx context.Context, headDrv string, diffText string) string {
+	pkgs := ExtractUpdatedPackages(diffText)
+	if len(pkgs) == 0 {
+		return ""
+	}
+
+	headPathsRaw, err := e.Exec.Run(ctx, "nix", "path-info", "-r", "--derivation", headDrv)
+	if err != nil {
+		return fmt.Sprintf("# Failed to query head derivation closure paths: %v\n", err)
+	}
+
+	pathMap := make(map[string]string)
+	for _, p := range strings.Split(headPathsRaw, "\n") {
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			continue
+		}
+		base := filepath.Base(trimmed)
+		parts := strings.SplitN(base, "-", 2)
+		if len(parts) == 2 {
+			pathMap[parts[1]] = trimmed
+		}
+	}
+
+	seenDrv := make(map[string]bool)
+	var b strings.Builder
+
+	for _, pkg := range pkgs {
+		drvPath := findMatchingDrv(pathMap, pkg)
+		if drvPath == "" || seenDrv[drvPath] {
+			continue
+		}
+		seenDrv[drvPath] = true
+
+		out, err := e.Exec.Run(ctx, "nix", "why-depends", "--derivation", headDrv, drvPath)
+		if err != nil {
+			b.WriteString(fmt.Sprintf("# why-depends for %s (%s): %v\n\n", pkg.Name, pkg.Version, err))
+		} else {
+			trimmedOut := strings.TrimSpace(out)
+			if trimmedOut != "" {
+				b.WriteString(fmt.Sprintf("# why-depends for %s (%s)\n%s\n\n", pkg.Name, pkg.Version, trimmedOut))
+			}
+		}
+	}
+
+	return b.String()
+}
+
+func findMatchingDrv(pathMap map[string]string, pkg Package) string {
+	key := pkg.Name + "-" + pkg.Version
+	if p, ok := pathMap[key]; ok {
+		return p
+	}
+	if !strings.HasSuffix(key, ".drv") {
+		if p, ok := pathMap[key+".drv"]; ok {
+			return p
+		}
+	}
+
+	// Loose fallback in case version parsing differed slightly from drv filename
+	prefix := pkg.Name + "-"
+	for nameVer, p := range pathMap {
+		if strings.HasPrefix(nameVer, prefix) && strings.Contains(nameVer, pkg.Version) {
+			return p
+		}
+	}
+
+	return ""
 }
 
 var (

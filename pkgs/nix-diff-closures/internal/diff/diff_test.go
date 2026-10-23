@@ -78,6 +78,9 @@ func TestEngineRun(t *testing.T) {
 			"nix [path-info --derivation .#devShells.x86_64-linux.default]":                             "/nix/store/111-drv",
 			"nix [path-info --derivation git+file:///repo?rev=base-sha#devShells.x86_64-linux.default]": "/nix/store/222-drv",
 			"nix [store diff-closures /nix/store/222-drv /nix/store/111-drv]":                           "bash: 5.2 → 5.3\n",
+			"nix-store [--query --tree /nix/store/111-drv]":                                             "/nix/store/111-drv\n└───/nix/store/333-bash-5.3.drv\n",
+			"nix [path-info -r --derivation /nix/store/111-drv]":                                        "/nix/store/333-bash-5.3.drv\n",
+			"nix [why-depends --derivation /nix/store/111-drv /nix/store/333-bash-5.3.drv]":             "/nix/store/111-drv -> /nix/store/333-bash-5.3.drv\n",
 		},
 	}
 
@@ -112,6 +115,12 @@ func TestEngineRun(t *testing.T) {
 		}
 		if res.NoChange {
 			t.Fatal("expected NoChange = false")
+		}
+		if res.TreeText == "" {
+			t.Fatal("expected TreeText to be populated")
+		}
+		if res.WhyDependsText == "" {
+			t.Fatal("expected WhyDependsText to be populated")
 		}
 	})
 

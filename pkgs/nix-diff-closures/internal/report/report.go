@@ -23,12 +23,14 @@ const DefaultHeadSize = 40000
 
 // TargetResult contains the diff status for a single target derivation.
 type TargetResult struct {
-	Target   string
-	BaseDrv  string
-	HeadDrv  string
-	DiffText string
-	NoChange bool
-	Error    string
+	Target         string
+	BaseDrv        string
+	HeadDrv        string
+	DiffText       string
+	TreeText       string
+	WhyDependsText string
+	NoChange       bool
+	Error          string
 }
 
 // VulnerabilityResult contains newly introduced and pre-existing vulnerabilities detected by OSV.
@@ -43,6 +45,8 @@ type Report struct {
 	CommentMarkdown         string
 	StepSummaryMarkdown     string
 	FullDiffText            string
+	FullTreeText            string
+	FullWhyDependsText      string
 	HasDiff                 bool
 	IsTruncated             bool
 	Vulnerabilities         []osv.PackageVulnerabilities // newly introduced (for backward compatibility)
@@ -64,6 +68,8 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 	headerText := meta.ProvenanceText("This report was generated automatically")
 
 	var fullDiffBuilder strings.Builder
+	var fullTreeBuilder strings.Builder
+	var fullWhyDependsBuilder strings.Builder
 	hasAnyDiff := false
 
 	for _, res := range results {
@@ -76,14 +82,34 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 			}
 			fullDiffBuilder.WriteString("\n")
 		}
+		if res.TreeText != "" {
+			fullTreeBuilder.WriteString(fmt.Sprintf("=== Target: %s ===\n", res.Target))
+			fullTreeBuilder.WriteString(res.TreeText)
+			if !strings.HasSuffix(res.TreeText, "\n") {
+				fullTreeBuilder.WriteString("\n")
+			}
+			fullTreeBuilder.WriteString("\n")
+		}
+		if res.WhyDependsText != "" {
+			fullWhyDependsBuilder.WriteString(fmt.Sprintf("=== Target: %s ===\n", res.Target))
+			fullWhyDependsBuilder.WriteString(res.WhyDependsText)
+			if !strings.HasSuffix(res.WhyDependsText, "\n") {
+				fullWhyDependsBuilder.WriteString("\n")
+			}
+			fullWhyDependsBuilder.WriteString("\n")
+		}
 	}
 
 	fullDiff := fullDiffBuilder.String()
+	fullTree := fullTreeBuilder.String()
+	fullWhyDepends := fullWhyDependsBuilder.String()
 	if !hasAnyDiff {
 		return Report{
 			CommentMarkdown:     "",
 			StepSummaryMarkdown: "",
 			FullDiffText:        "",
+			FullTreeText:        "",
+			FullWhyDependsText:  "",
 			HasDiff:             false,
 			IsTruncated:         false,
 		}, nil
@@ -114,29 +140,21 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 	}
 
 	artifactURL := fmt.Sprintf("%s#artifacts", meta.RunURL())
+	md.WriteString("> [!NOTE]\n")
 	if vulns.Checked && len(vulns.NewVulns) == 0 {
-		md.WriteString("> [!NOTE]\n")
 		md.WriteString("> **Vulnerability Scan**: No newly introduced vulnerabilities detected in updated closure.\n")
-		if isTruncated {
-			md.WriteString(">\n")
-			md.WriteString(fmt.Sprintf("> The diff output is large (%d bytes) and has been truncated to fit GitHub comment size limits.\n", len(fullDiff)))
-			if meta.ServerURL != "" && meta.Repository != "" && meta.RunID != "" {
-				md.WriteString(fmt.Sprintf("> You can view the full diff in the [Job Artifacts](%s).\n", artifactURL))
-			} else {
-				md.WriteString("> You can view the full diff in the Job Artifacts.\n")
-			}
-		}
-		md.WriteString("\n")
-	} else if isTruncated {
-		md.WriteString("> [!NOTE]\n")
-		md.WriteString(fmt.Sprintf("> The diff output is large (%d bytes) and has been truncated to fit GitHub comment size limits.\n", len(fullDiff)))
-		if meta.ServerURL != "" && meta.Repository != "" && meta.RunID != "" {
-			md.WriteString(fmt.Sprintf("> You can view the full diff in the [Job Artifacts](%s).\n", artifactURL))
-		} else {
-			md.WriteString("> You can view the full diff in the Job Artifacts.\n")
-		}
-		md.WriteString("\n")
 	}
+	if isTruncated {
+		md.WriteString(">\n")
+		md.WriteString(fmt.Sprintf("> The diff output is large (%d bytes) and has been truncated to fit GitHub comment size limits.\n", len(fullDiff)))
+	}
+	md.WriteString(">\n")
+	if meta.ServerURL != "" && meta.Repository != "" && meta.RunID != "" {
+		md.WriteString(fmt.Sprintf("> Detailed full diff and dependency trees (`tree.txt`, `why-depends.txt`) are available in the [Job Artifacts](%s).\n", artifactURL))
+	} else {
+		md.WriteString("> Detailed full diff and dependency trees (`tree.txt`, `why-depends.txt`) are available in the Job Artifacts.\n")
+	}
+	md.WriteString("\n")
 
 	for _, res := range results {
 		escapedTarget := html.EscapeString(res.Target)
@@ -196,6 +214,8 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 		CommentMarkdown:         commentMarkdown,
 		StepSummaryMarkdown:     summary.String(),
 		FullDiffText:            fullDiff,
+		FullTreeText:            fullTree,
+		FullWhyDependsText:      fullWhyDepends,
 		HasDiff:                 true,
 		IsTruncated:             isTruncated,
 		Vulnerabilities:         vulns.NewVulns,

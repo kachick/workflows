@@ -56,7 +56,7 @@ jobs:
       has-vulnerabilities: ${{ steps.diff.outputs.has_vulnerabilities }}
       vulnerabilities-count: ${{ steps.diff.outputs.vulnerabilities_count }}
     runs-on: ${{ inputs.runs-on }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -102,7 +102,9 @@ jobs:
             --head-size="${HEAD_SIZE}" \
             --check-vulnerabilities="${CHECK_VULNS}" \
             --output-comment="${RUNNER_TEMP}/comment.md" \
-            --output-full-diff="${RUNNER_TEMP}/diff.txt"
+            --output-full-diff="${RUNNER_TEMP}/diff.txt" \
+            --output-tree="${RUNNER_TEMP}/tree.txt" \
+            --output-why-depends="${RUNNER_TEMP}/why-depends.txt"
 
       - name: Gate check for newly introduced vulnerabilities
         if: steps.diff.outputs.has_vulnerabilities == 'true'
@@ -112,9 +114,12 @@ jobs:
           echo "::error::New vulnerabilities detected in closure update (${VULN_COUNT} package(s) affected). Intentionally failing this check to prevent unattended automerge."
           exit 1
 
-      - name: Upload full diff artifact
-        if: steps.diff.outputs.is_truncated == 'true'
+      - name: Upload closure diff and dependency tree artifacts
+        if: steps.diff.outputs.has_diff == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nix-diff-full
-          path: ${{ runner.temp }}/diff.txt
+          path: |
+            ${{ runner.temp }}/diff.txt
+            ${{ runner.temp }}/tree.txt
+            ${{ runner.temp }}/why-depends.txt

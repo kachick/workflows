@@ -35,6 +35,8 @@ func run() error {
 		targets        string
 		outComment     string
 		outFullDiff    string
+		outTree        string
+		outWhyDepends  string
 		maxSize        int
 		headSize       int
 		prNumber       int
@@ -52,6 +54,8 @@ func run() error {
 	flag.StringVar(&targets, "targets", "", "Targets to diff (comma or newline separated, e.g. devShells.x86_64-linux.default)")
 	flag.StringVar(&outComment, "output-comment", "comment.md", "Path to save comment markdown")
 	flag.StringVar(&outFullDiff, "output-full-diff", "diff.txt", "Path to save full diff text")
+	flag.StringVar(&outTree, "output-tree", "", "Path to save target dependency tree text")
+	flag.StringVar(&outWhyDepends, "output-why-depends", "", "Path to save why-depends text")
 	flag.IntVar(&maxSize, "max-size", report.DefaultMaxSize, "Maximum bytes before truncating comment")
 	flag.IntVar(&headSize, "head-size", report.DefaultHeadSize, "Target bytes for truncated preview")
 	flag.IntVar(&prNumber, "pr", 0, "Pull request number")
@@ -240,7 +244,7 @@ func run() error {
 
 	if rep.HasDiff {
 		checker := &leakcheck.BetterleaksChecker{}
-		if err := leakcheck.CheckMultiple(ctx, checker, rep.CommentMarkdown, rep.FullDiffText); err != nil {
+		if err := leakcheck.CheckMultiple(ctx, checker, rep.CommentMarkdown, rep.FullDiffText, rep.FullTreeText, rep.FullWhyDependsText); err != nil {
 			return fmt.Errorf("pre-flight leak check failed for diff report: %w", err)
 		}
 
@@ -252,6 +256,16 @@ func run() error {
 		if outFullDiff != "" {
 			if err := os.WriteFile(outFullDiff, []byte(rep.FullDiffText), 0o644); err != nil {
 				return fmt.Errorf("failed to write full diff file: %w", err)
+			}
+		}
+		if outTree != "" && rep.FullTreeText != "" {
+			if err := os.WriteFile(outTree, []byte(rep.FullTreeText), 0o644); err != nil {
+				return fmt.Errorf("failed to write tree file: %w", err)
+			}
+		}
+		if outWhyDepends != "" && rep.FullWhyDependsText != "" {
+			if err := os.WriteFile(outWhyDepends, []byte(rep.FullWhyDependsText), 0o644); err != nil {
+				return fmt.Errorf("failed to write why-depends file: %w", err)
 			}
 		}
 	}
