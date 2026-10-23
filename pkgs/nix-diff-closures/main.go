@@ -31,23 +31,24 @@ func run() error {
 	}
 
 	var (
-		baseRev        string
-		targets        string
-		outComment     string
-		outFullDiff    string
-		outTree        string
-		outWhyDepends  string
-		maxSize        int
-		headSize       int
-		prNumber       int
-		repo           string
-		token          string
-		postComment    bool
-		repoDir        string
-		stepSummaryOut bool
-		checkVulns     bool
-		osvEndpoint    string
-		failOnVuln     bool
+		baseRev            string
+		targets            string
+		outComment         string
+		outFullDiff        string
+		outTree            string
+		outWhyDepends      string
+		outVulnerabilities string
+		maxSize            int
+		headSize           int
+		prNumber           int
+		repo               string
+		token              string
+		postComment        bool
+		repoDir            string
+		stepSummaryOut     bool
+		checkVulns         bool
+		osvEndpoint        string
+		failOnVuln         bool
 	)
 
 	flag.StringVar(&baseRev, "base-rev", "", "Base git revision (e.g. PR base SHA)")
@@ -56,6 +57,7 @@ func run() error {
 	flag.StringVar(&outFullDiff, "output-full-diff", "diff.txt", "Path to save full diff text")
 	flag.StringVar(&outTree, "output-tree", "", "Path to save target dependency tree text")
 	flag.StringVar(&outWhyDepends, "output-why-depends", "", "Path to save why-depends text")
+	flag.StringVar(&outVulnerabilities, "output-vulnerabilities", "", "Path to save vulnerability report text")
 	flag.IntVar(&maxSize, "max-size", report.DefaultMaxSize, "Maximum bytes before truncating comment")
 	flag.IntVar(&headSize, "head-size", report.DefaultHeadSize, "Target bytes for truncated preview")
 	flag.IntVar(&prNumber, "pr", 0, "Pull request number")
@@ -185,15 +187,28 @@ func run() error {
 					pkgVulns[key] = pv.Vulnerabilities
 				}
 
-				beforeVulnsByPkg := make(map[string]map[string]bool)
+				beforeVulnsByPkg := make(map[string]map[string]osv.Vulnerability)
 				for _, bp := range beforePkgs {
 					key := bp.Name + "@" + bp.Version
 					if vList, ok := pkgVulns[key]; ok {
 						if beforeVulnsByPkg[bp.Name] == nil {
-							beforeVulnsByPkg[bp.Name] = make(map[string]bool)
+							beforeVulnsByPkg[bp.Name] = make(map[string]osv.Vulnerability)
 						}
 						for _, v := range vList {
-							beforeVulnsByPkg[bp.Name][v.ID] = true
+							beforeVulnsByPkg[bp.Name][v.ID] = v
+						}
+					}
+				}
+
+				afterVulnsByPkg := make(map[string]map[string]osv.Vulnerability)
+				for _, ap := range afterPkgs {
+					key := ap.Name + "@" + ap.Version
+					if vList, ok := pkgVulns[key]; ok {
+						if afterVulnsByPkg[ap.Name] == nil {
+							afterVulnsByPkg[ap.Name] = make(map[string]osv.Vulnerability)
+						}
+						for _, v := range vList {
+							afterVulnsByPkg[ap.Name][v.ID] = v
 						}
 					}
 				}
@@ -210,11 +225,13 @@ func run() error {
 					beforeSet := beforeVulnsByPkg[ap.Name]
 
 					for _, v := range vList {
-						if beforeSet != nil && beforeSet[v.ID] {
-							alreadyPresent = append(alreadyPresent, v)
-						} else {
-							newlyIntroduced = append(newlyIntroduced, v)
+						if beforeSet != nil {
+							if _, exists := beforeSet[v.ID]; exists {
+								alreadyPresent = append(alreadyPresent, v)
+								continue
+							}
 						}
+						newlyIntroduced = append(newlyIntroduced, v)
 					}
 
 					if len(newlyIntroduced) > 0 {
@@ -227,6 +244,32 @@ func run() error {
 						vulnRes.ExistingVulns = append(vulnRes.ExistingVulns, osv.PackageVulnerabilities{
 							Package:         ap,
 							Vulnerabilities: alreadyPresent,
+						})
+					}
+				}
+
+				for _, bp := range beforePkgs {
+					key := bp.Name + "@" + bp.Version
+					vList, ok := pkgVulns[key]
+					if !ok || len(vList) == 0 {
+						continue
+					}
+
+					var resolved []osv.Vulnerability
+					afterSet := afterVulnsByPkg[bp.Name]
+
+					for _, v := range vList {
+						if afterSet == nil {
+							resolved = append(resolved, v)
+						} else if _, exists := afterSet[v.ID]; !exists {
+							resolved = append(resolved, v)
+						}
+					}
+
+					if len(resolved) > 0 {
+						vulnRes.ResolvedVulns = append(vulnRes.ResolvedVulns, osv.PackageVulnerabilities{
+							Package:         bp,
+							Vulnerabilities: resolved,
 						})
 					}
 				}
@@ -244,7 +287,7 @@ func run() error {
 
 	if rep.HasDiff {
 		checker := &leakcheck.BetterleaksChecker{}
-		if err := leakcheck.CheckMultiple(ctx, checker, rep.CommentMarkdown, rep.FullDiffText, rep.FullTreeText, rep.FullWhyDependsText); err != nil {
+		if err := leakcheck.CheckMultiple(ctx, checker, rep.CommentMarkdown, rep.FullDiffText, rep.FullTreeText, rep.FullWhyDependsText, rep.FullVulnerabilitiesText); err != nil {
 			return fmt.Errorf("pre-flight leak check failed for diff report: %w", err)
 		}
 
@@ -268,6 +311,11 @@ func run() error {
 				return fmt.Errorf("failed to write why-depends file: %w", err)
 			}
 		}
+		if outVulnerabilities != "" && rep.FullVulnerabilitiesText != "" {
+			if err := os.WriteFile(outVulnerabilities, []byte(rep.FullVulnerabilitiesText), 0o644); err != nil {
+				return fmt.Errorf("failed to write vulnerabilities file: %w", err)
+			}
+		}
 	}
 
 	writeGHAOutput("has_diff", strconv.FormatBool(rep.HasDiff))
@@ -280,7 +328,7 @@ func run() error {
 	}
 
 	if checkVulns {
-		fmt.Printf("Vulnerability scan: %d newly introduced vulnerability package(s), %d pre-existing vulnerability package(s)\n", len(rep.Vulnerabilities), len(rep.ExistingVulnerabilities))
+		fmt.Printf("Vulnerability scan: %d newly introduced, %d resolved, %d pre-existing package(s)\n", len(rep.Vulnerabilities), len(rep.ResolvedVulnerabilities), len(rep.ExistingVulnerabilities))
 	}
 
 	if !rep.HasDiff {

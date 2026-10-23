@@ -297,12 +297,56 @@ func TestBuildReport(t *testing.T) {
 		if strings.Contains(rep.CommentMarkdown, "DEBIAN-CVE-2024-27297") {
 			t.Fatal("comment markdown should not list pre-existing vulnerabilities")
 		}
-		// StepSummaryMarkdown SHOULD show existing vulnerabilities details
-		if !strings.Contains(rep.StepSummaryMarkdown, "DEBIAN-CVE-2024-27297") {
-			t.Fatalf("step summary markdown should list pre-existing vulnerabilities, got:\n%s", rep.StepSummaryMarkdown)
+		// StepSummaryMarkdown should summarize existing vulnerabilities without dumping full CVE lists
+		if strings.Contains(rep.StepSummaryMarkdown, "DEBIAN-CVE-2024-27297") {
+			t.Fatal("step summary markdown should not list pre-existing CVE IDs directly")
 		}
-		if !strings.Contains(rep.StepSummaryMarkdown, "Existing vulnerabilities in updated packages (already present in base closure)") {
-			t.Fatal("expected existing vulnerabilities details header in step summary")
+		if !strings.Contains(rep.StepSummaryMarkdown, "Existing vulnerabilities summary (1 package(s) still affected)") {
+			t.Fatalf("expected existing vulnerabilities summary header in step summary, got:\n%s", rep.StepSummaryMarkdown)
+		}
+		// FullVulnerabilitiesText SHOULD contain full pre-existing vulnerability details
+		if !strings.Contains(rep.FullVulnerabilitiesText, "DEBIAN-CVE-2024-27297") {
+			t.Fatalf("full vulnerabilities text should list pre-existing vulnerability details, got:\n%s", rep.FullVulnerabilitiesText)
+		}
+	})
+
+	t.Run("formats resolved vulnerabilities with tip alert", func(t *testing.T) {
+		results := []TargetResult{
+			{
+				Target:   "devShells.x86_64-linux.default",
+				DiffText: "bash: 5.3p15.drv → 5.3p20.drv\n",
+			},
+		}
+		vulnRes := VulnerabilityResult{
+			Checked: true,
+			ResolvedVulns: []osv.PackageVulnerabilities{
+				{
+					Package: osv.Package{Name: "bash", Version: "5.3p15.drv"},
+					Vulnerabilities: []osv.Vulnerability{
+						{ID: "CVE-2026-99999"},
+					},
+				},
+			},
+		}
+
+		rep, err := Build(results, vulnRes, 1000, 500, completeMeta, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rep.ResolvedVulnerabilities) != 1 {
+			t.Fatalf("expected 1 resolved vulnerability result, got %d", len(rep.ResolvedVulnerabilities))
+		}
+		if !strings.Contains(rep.CommentMarkdown, "> [!TIP]") {
+			t.Fatal("expected tip alert in comment markdown for resolved vulnerabilities")
+		}
+		if !strings.Contains(rep.CommentMarkdown, "**Resolved Vulnerabilities in Updated Closure**") {
+			t.Fatal("expected resolved heading in tip alert")
+		}
+		if !strings.Contains(rep.CommentMarkdown, "[CVE-2026-99999](https://osv.dev/vulnerability/CVE-2026-99999)") {
+			t.Fatalf("expected linked vulnerability ID in markdown, got:\n%s", rep.CommentMarkdown)
+		}
+		if !strings.Contains(rep.FullVulnerabilitiesText, "CVE-2026-99999") {
+			t.Fatalf("full vulnerabilities text should contain resolved vulnerability, got:\n%s", rep.FullVulnerabilitiesText)
 		}
 	})
 

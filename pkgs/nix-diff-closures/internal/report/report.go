@@ -33,10 +33,11 @@ type TargetResult struct {
 	Error          string
 }
 
-// VulnerabilityResult contains newly introduced and pre-existing vulnerabilities detected by OSV.
+// VulnerabilityResult contains newly introduced, resolved, and pre-existing vulnerabilities detected by OSV.
 type VulnerabilityResult struct {
 	Checked       bool
 	NewVulns      []osv.PackageVulnerabilities
+	ResolvedVulns []osv.PackageVulnerabilities
 	ExistingVulns []osv.PackageVulnerabilities
 }
 
@@ -47,9 +48,11 @@ type Report struct {
 	FullDiffText            string
 	FullTreeText            string
 	FullWhyDependsText      string
+	FullVulnerabilitiesText string
 	HasDiff                 bool
 	IsTruncated             bool
 	Vulnerabilities         []osv.PackageVulnerabilities // newly introduced (for backward compatibility)
+	ResolvedVulnerabilities []osv.PackageVulnerabilities
 	ExistingVulnerabilities []osv.PackageVulnerabilities
 }
 
@@ -139,6 +142,21 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 		md.WriteString(">\n> *Note: This check fails intentionally when new vulnerabilities are detected, preventing automated merges (automerge) from introducing them without human review.*\n\n")
 	}
 
+	if len(vulns.ResolvedVulns) > 0 {
+		md.WriteString("> [!TIP]\n")
+		md.WriteString("> **Resolved Vulnerabilities in Updated Closure**\n>\n")
+		md.WriteString("> The following vulnerabilities were fixed or removed by this update:\n")
+		for _, pv := range vulns.ResolvedVulns {
+			var ids []string
+			for _, v := range pv.Vulnerabilities {
+				escapedID := html.EscapeString(v.ID)
+				ids = append(ids, fmt.Sprintf("[%s](https://osv.dev/vulnerability/%s)", escapedID, url.PathEscape(v.ID)))
+			}
+			md.WriteString(fmt.Sprintf("> - **%s** (`%s`): %s\n", html.EscapeString(pv.Package.Name), html.EscapeString(pv.Package.Version), strings.Join(ids, ", ")))
+		}
+		md.WriteString("\n")
+	}
+
 	artifactURL := fmt.Sprintf("%s#artifacts", meta.RunURL())
 	md.WriteString("> [!NOTE]\n")
 	if vulns.Checked && len(vulns.NewVulns) == 0 {
@@ -150,9 +168,9 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 	}
 	md.WriteString(">\n")
 	if meta.ServerURL != "" && meta.Repository != "" && meta.RunID != "" {
-		md.WriteString(fmt.Sprintf("> Detailed full diff and dependency trees (`tree.txt`, `why-depends.txt`) are available in the [Job Artifacts](%s).\n", artifactURL))
+		md.WriteString(fmt.Sprintf("> Detailed full diff, dependency trees (`tree.txt`, `why-depends.txt`), and vulnerability details (`vulnerabilities.txt`) are available in the [Job Artifacts](%s).\n", artifactURL))
 	} else {
-		md.WriteString("> Detailed full diff and dependency trees (`tree.txt`, `why-depends.txt`) are available in the Job Artifacts.\n")
+		md.WriteString("> Detailed full diff, dependency trees (`tree.txt`, `why-depends.txt`), and vulnerability details (`vulnerabilities.txt`) are available in the Job Artifacts.\n")
 	}
 	md.WriteString("\n")
 
@@ -197,16 +215,8 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 
 	if len(vulns.ExistingVulns) > 0 {
 		summary.WriteString("<details>\n")
-		summary.WriteString("<summary><b>Existing vulnerabilities in updated packages (already present in base closure)</b></summary>\n\n")
-		summary.WriteString("The following updated packages contain known vulnerabilities that were already present before this update:\n")
-		for _, pv := range vulns.ExistingVulns {
-			var ids []string
-			for _, v := range pv.Vulnerabilities {
-				escapedID := html.EscapeString(v.ID)
-				ids = append(ids, fmt.Sprintf("[%s](https://osv.dev/vulnerability/%s)", escapedID, url.PathEscape(v.ID)))
-			}
-			summary.WriteString(fmt.Sprintf("- **%s** (`%s`): %s\n", html.EscapeString(pv.Package.Name), html.EscapeString(pv.Package.Version), strings.Join(ids, ", ")))
-		}
+		summary.WriteString(fmt.Sprintf("<summary><b>Existing vulnerabilities summary (%d package(s) still affected)</b></summary>\n\n", len(vulns.ExistingVulns)))
+		summary.WriteString(fmt.Sprintf("The updated closure still contains known vulnerabilities that were already present before this update (%d package(s) affected). Detailed CVE lists are available in the Job Artifacts (`vulnerabilities.txt`).\n", len(vulns.ExistingVulns)))
 		summary.WriteString("\n</details>\n\n")
 	}
 
@@ -216,11 +226,67 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 		FullDiffText:            fullDiff,
 		FullTreeText:            fullTree,
 		FullWhyDependsText:      fullWhyDepends,
+		FullVulnerabilitiesText: FormatVulnerabilitiesText(vulns),
 		HasDiff:                 true,
 		IsTruncated:             isTruncated,
 		Vulnerabilities:         vulns.NewVulns,
+		ResolvedVulnerabilities: vulns.ResolvedVulns,
 		ExistingVulnerabilities: vulns.ExistingVulns,
 	}, nil
+}
+
+// FormatVulnerabilitiesText formats the complete vulnerability details for job artifacts.
+func FormatVulnerabilitiesText(vulns VulnerabilityResult) string {
+	if !vulns.Checked {
+		return "Vulnerability check was not enabled.\n"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("=== Vulnerability Scan Report ===\n\n")
+	sb.WriteString(fmt.Sprintf("Summary:\n  - Newly introduced: %d package(s)\n  - Resolved: %d package(s)\n  - Pre-existing (remained): %d package(s)\n\n",
+		len(vulns.NewVulns), len(vulns.ResolvedVulns), len(vulns.ExistingVulns)))
+
+	if len(vulns.NewVulns) > 0 {
+		sb.WriteString("=== Newly Introduced Vulnerabilities ===\n")
+		for _, pv := range vulns.NewVulns {
+			var ids []string
+			for _, v := range pv.Vulnerabilities {
+				ids = append(ids, fmt.Sprintf("%s (https://osv.dev/vulnerability/%s)", v.ID, url.PathEscape(v.ID)))
+			}
+			sb.WriteString(fmt.Sprintf("- %s (%s): %s\n", pv.Package.Name, pv.Package.Version, strings.Join(ids, ", ")))
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(vulns.ResolvedVulns) > 0 {
+		sb.WriteString("=== Resolved Vulnerabilities ===\n")
+		for _, pv := range vulns.ResolvedVulns {
+			var ids []string
+			for _, v := range pv.Vulnerabilities {
+				ids = append(ids, fmt.Sprintf("%s (https://osv.dev/vulnerability/%s)", v.ID, url.PathEscape(v.ID)))
+			}
+			sb.WriteString(fmt.Sprintf("- %s (%s): %s\n", pv.Package.Name, pv.Package.Version, strings.Join(ids, ", ")))
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(vulns.ExistingVulns) > 0 {
+		sb.WriteString("=== Pre-existing Vulnerabilities (Remained) ===\n")
+		for _, pv := range vulns.ExistingVulns {
+			var ids []string
+			for _, v := range pv.Vulnerabilities {
+				ids = append(ids, fmt.Sprintf("%s (https://osv.dev/vulnerability/%s)", v.ID, url.PathEscape(v.ID)))
+			}
+			sb.WriteString(fmt.Sprintf("- %s (%s): %s\n", pv.Package.Name, pv.Package.Version, strings.Join(ids, ", ")))
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(vulns.NewVulns) == 0 && len(vulns.ResolvedVulns) == 0 && len(vulns.ExistingVulns) == 0 {
+		sb.WriteString("No known vulnerabilities found in updated packages.\n")
+	}
+
+	return sb.String()
 }
 
 func codeFenceFor(s string) string {
