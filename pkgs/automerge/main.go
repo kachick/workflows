@@ -152,6 +152,7 @@ type CommandRunner interface {
 	AddLabelToPR(ctx context.Context, number int, label string) error
 	MergePR(ctx context.Context, number int, method string) error
 	CommentPR(ctx context.Context, number int, body string) (string, error)
+	RequestChangesPR(ctx context.Context, number int, body string) error
 }
 
 type DefaultCommandRunner struct{}
@@ -252,6 +253,16 @@ func (r *DefaultCommandRunner) CommentPR(ctx context.Context, number int, body s
 		return "", err
 	}
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+func (r *DefaultCommandRunner) RequestChangesPR(ctx context.Context, number int, body string) error {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "review", strconv.Itoa(number),
+		"--request-changes",
+		"--body", body,
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func parseAllowedBots(input string) []string {
@@ -1675,15 +1686,14 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					if err := runner.AddLabelToPR(ctx, pr.Number, blockedLabelName); err != nil {
 						fmt.Printf("Warning: failed to add label %q to PR #%d: %v\n", blockedLabelName, pr.Number, err)
 					}
-					// Why post a comment only on first labeling:
-					// Avoid posting repetitive comments on every scheduled run.
+					// Why not runner.CommentPR:
+					// Requesting changes posts a review with the explanation while changing the pull request review state.
+					// Posting both an issue comment and a review would create duplicate notifications and clutter the timeline.
 					fullSteps := completeSkippedSteps(res.Steps, cfg)
-					commentBody := fmt.Sprintf("Automerge was skipped because %s. Marking with `%s` for manual review.\n\n%s\n%s",
+					reviewBody := fmt.Sprintf("Automerge was skipped because %s. Marking with `%s` for manual review.\n\nThis review may block merging if the repository requires review approvals. If you still want to merge this pull request, please dismiss this review.\n\n%s\n%s",
 						res.Reason, blockedLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
-					var err error
-					commentURL, err = runner.CommentPR(ctx, pr.Number, commentBody)
-					if err != nil {
-						fmt.Printf("Warning: failed to comment on blocked PR #%d: %v\n", pr.Number, err)
+					if err := runner.RequestChangesPR(ctx, pr.Number, reviewBody); err != nil {
+						fmt.Printf("Warning: failed to request changes on blocked PR #%d: %v\n", pr.Number, err)
 					}
 				}
 				summaries = append(summaries, PRSummaryResult{
@@ -1768,12 +1778,13 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 							Details: reason,
 						})
 						fullSteps := completeSkippedSteps(vetoSteps, cfg)
-						commentBody := fmt.Sprintf("Automerge was vetoed by vulnerability scan: %s. Marking with `%s`.\n\nAs long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after resolving the vulnerability or pushing new commits.\n\n%s\n%s",
+						// Why not runner.CommentPR:
+						// Requesting changes posts a review with the explanation while changing the pull request review state.
+						// Posting both an issue comment and a review would create duplicate notifications and clutter the timeline.
+						reviewBody := fmt.Sprintf("Automerge was vetoed by vulnerability scan: %s. Marking with `%s`.\n\nAs long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after resolving the vulnerability or pushing new commits.\n\nThis review may block merging if the repository requires review approvals. If you still want to merge this pull request, please dismiss this review.\n\n%s\n%s",
 							reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
-						var err error
-						commentURL, err = runner.CommentPR(ctx, pr.Number, commentBody)
-						if err != nil {
-							fmt.Printf("Warning: failed to comment on vetoed PR #%d: %v\n", pr.Number, err)
+						if err := runner.RequestChangesPR(ctx, pr.Number, reviewBody); err != nil {
+							fmt.Printf("Warning: failed to request changes on vetoed PR #%d: %v\n", pr.Number, err)
 						}
 					}
 					summaries = append(summaries, PRSummaryResult{
@@ -1850,12 +1861,13 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 							Details: reason,
 						})
 						fullSteps := completeSkippedSteps(vetoSteps, cfg)
-						commentBody := fmt.Sprintf("Automerge was vetoed by LLM veto: %s. Marking with `%s`.\n\nAs long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after updating the review bot or pushing new commits.\n\n%s\n%s",
+						// Why not runner.CommentPR:
+						// Requesting changes posts a review with the explanation while changing the pull request review state.
+						// Posting both an issue comment and a review would create duplicate notifications and clutter the timeline.
+						reviewBody := fmt.Sprintf("Automerge was vetoed by LLM veto: %s. Marking with `%s`.\n\nAs long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after updating the review bot or pushing new commits.\n\nThis review may block merging if the repository requires review approvals. If you still want to merge this pull request, please dismiss this review.\n\n%s\n%s",
 							reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
-						var err error
-						commentURL, err = runner.CommentPR(ctx, pr.Number, commentBody)
-						if err != nil {
-							fmt.Printf("Warning: failed to comment on vetoed PR #%d: %v\n", pr.Number, err)
+						if err := runner.RequestChangesPR(ctx, pr.Number, reviewBody); err != nil {
+							fmt.Printf("Warning: failed to request changes on vetoed PR #%d: %v\n", pr.Number, err)
 						}
 					}
 					summaries = append(summaries, PRSummaryResult{

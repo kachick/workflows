@@ -344,19 +344,21 @@ func TestIsEligible(t *testing.T) {
 }
 
 type mockRunner struct {
-	prs              []PullRequest
-	fetchPRResponses map[int][]*PullRequest
-	fetchPRErrOn     map[int]error
-	fetchPRCalls     map[int]int
-	diffs            map[int]string
-	fetchErr         error
-	diffErrOn        map[int]error
-	ensuredLabels    []string
-	addedLabels      map[int][]string
-	mergedPRs        []int
-	mergeErrOn       map[int]error
-	comments         map[int][]string
-	commentErrOn     map[int]error
+	prs                 []PullRequest
+	fetchPRResponses    map[int][]*PullRequest
+	fetchPRErrOn        map[int]error
+	fetchPRCalls        map[int]int
+	diffs               map[int]string
+	fetchErr            error
+	diffErrOn           map[int]error
+	ensuredLabels       []string
+	addedLabels         map[int][]string
+	mergedPRs           []int
+	mergeErrOn          map[int]error
+	comments            map[int][]string
+	commentErrOn        map[int]error
+	requestedChanges    map[int][]string
+	requestChangesErrOn map[int]error
 }
 
 func (m *mockRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest, error) {
@@ -432,6 +434,17 @@ func (m *mockRunner) CommentPR(ctx context.Context, number int, body string) (st
 	}
 	m.comments[number] = append(m.comments[number], body)
 	return fmt.Sprintf("https://github.com/kachick/workflows/pull/%d#issuecomment-%d", number, len(m.comments[number])), nil
+}
+
+func (m *mockRunner) RequestChangesPR(ctx context.Context, number int, body string) error {
+	if err, ok := m.requestChangesErrOn[number]; ok {
+		return err
+	}
+	if m.requestedChanges == nil {
+		m.requestedChanges = make(map[int][]string)
+	}
+	m.requestedChanges[number] = append(m.requestedChanges[number], body)
+	return nil
 }
 
 type mockReviewer struct {
@@ -636,18 +649,21 @@ func TestExecuteLLMVeto(t *testing.T) {
 		t.Errorf("expected PR 201 comment to contain passing LLM veto step, got %q", runner.comments[201][0])
 	}
 
-	// 202 should have veto comment with reason
-	if len(runner.comments[202]) != 1 {
-		t.Fatalf("expected 1 comment on PR 202, got %v", runner.comments[202])
+	// 202 should have requested changes review with reason and dismissal guidance
+	if len(runner.requestedChanges[202]) != 1 {
+		t.Fatalf("expected 1 requested changes review on PR 202, got %v", runner.requestedChanges[202])
 	}
-	if !strings.Contains(runner.comments[202][0], "Automerge was vetoed by LLM veto: breaking change found in release notes.") {
-		t.Errorf("expected PR 202 comment to contain veto header, got %q", runner.comments[202][0])
+	if !strings.Contains(runner.requestedChanges[202][0], "Automerge was vetoed by LLM veto: breaking change found in release notes.") {
+		t.Errorf("expected PR 202 requested changes to contain veto header, got %q", runner.requestedChanges[202][0])
 	}
-	if !strings.Contains(runner.comments[202][0], "- :x: LLM veto: breaking change found in release notes") {
-		t.Errorf("expected PR 202 comment to contain veto step, got %q", runner.comments[202][0])
+	if !strings.Contains(runner.requestedChanges[202][0], "- :x: LLM veto: breaking change found in release notes") {
+		t.Errorf("expected PR 202 requested changes to contain veto step, got %q", runner.requestedChanges[202][0])
 	}
-	if !strings.Contains(runner.comments[202][0], "As long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after updating the review bot or pushing new commits.") {
-		t.Errorf("expected PR 202 comment to contain next-step guidance, got %q", runner.comments[202][0])
+	if !strings.Contains(runner.requestedChanges[202][0], "As long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after updating the review bot or pushing new commits.") {
+		t.Errorf("expected PR 202 requested changes to contain next-step guidance, got %q", runner.requestedChanges[202][0])
+	}
+	if !strings.Contains(runner.requestedChanges[202][0], "This review may block merging if the repository requires review approvals. If you still want to merge this pull request, please dismiss this review.") {
+		t.Errorf("expected PR 202 requested changes to contain dismissal guidance, got %q", runner.requestedChanges[202][0])
 	}
 
 	// Subsequent runs must skip already vetoed PRs without calling reviewer or spending tokens
@@ -1588,9 +1604,18 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 		t.Errorf("expected PR 404 comment to contain %q, got:\n%s", expectedMarker, comment404)
 	}
 
-	// 402 must be labeled with vetoLabelName
+	// 402 must be labeled with vetoLabelName and have requested changes review
 	if !slices.Equal(runner.addedLabels[402], []string{vetoLabelName}) {
 		t.Errorf("expected PR 402 to have veto label %v, got %v", []string{vetoLabelName}, runner.addedLabels[402])
+	}
+	if len(runner.requestedChanges[402]) != 1 {
+		t.Fatalf("expected 1 requested changes review on PR 402, got %v", runner.requestedChanges[402])
+	}
+	if !strings.Contains(runner.requestedChanges[402][0], "Automerge was vetoed by vulnerability scan: new vulnerability: GHSA-1234.") {
+		t.Errorf("expected PR 402 requested changes to contain vuln reason, got %q", runner.requestedChanges[402][0])
+	}
+	if !strings.Contains(runner.requestedChanges[402][0], "This review may block merging if the repository requires review approvals. If you still want to merge this pull request, please dismiss this review.") {
+		t.Errorf("expected PR 402 requested changes to contain dismissal guidance, got %q", runner.requestedChanges[402][0])
 	}
 
 	summaryBytes, err := os.ReadFile(summaryFile)
@@ -1753,37 +1778,40 @@ func TestExecuteLabelsBlockedPR(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// 601 must be labeled with automerge:blocked and commented on
+	// 601 must be labeled with automerge:blocked and have requested changes review
 	if !slices.Equal(runner.addedLabels[601], []string{blockedLabelName}) {
 		t.Errorf("expected PR 601 to have label %v, got %v", []string{blockedLabelName}, runner.addedLabels[601])
 	}
 	if !slices.Contains(runner.ensuredLabels, blockedLabelName) {
 		t.Errorf("expected ensuredLabels to contain %q, got %v", blockedLabelName, runner.ensuredLabels)
 	}
-	if len(runner.comments[601]) != 1 {
-		t.Fatalf("expected 1 comment on PR 601, got %v", runner.comments[601])
+	if len(runner.requestedChanges[601]) != 1 {
+		t.Fatalf("expected 1 requested changes review on PR 601, got %v", runner.requestedChanges[601])
 	}
-	if !strings.Contains(runner.comments[601][0], blockedLabelName) {
-		t.Errorf("expected comment on 601 to mention %q, got %q", blockedLabelName, runner.comments[601][0])
+	if !strings.Contains(runner.requestedChanges[601][0], blockedLabelName) {
+		t.Errorf("expected requested changes on 601 to mention %q, got %q", blockedLabelName, runner.requestedChanges[601][0])
 	}
-	if !strings.Contains(runner.comments[601][0], "Inspected by [actions/runs/99999]") {
-		t.Errorf("expected comment on 601 to include provenance link, got %q", runner.comments[601][0])
+	if !strings.Contains(runner.requestedChanges[601][0], "Inspected by [actions/runs/99999]") {
+		t.Errorf("expected requested changes on 601 to include provenance link, got %q", runner.requestedChanges[601][0])
+	}
+	if !strings.Contains(runner.requestedChanges[601][0], "This review may block merging if the repository requires review approvals. If you still want to merge this pull request, please dismiss this review.") {
+		t.Errorf("expected requested changes on 601 to include dismissal guidance, got %q", runner.requestedChanges[601][0])
 	}
 
-	// 602 was already labeled, so AddLabelToPR and CommentPR must NOT be called again
+	// 602 was already labeled, so AddLabelToPR and RequestChangesPR must NOT be called again
 	if len(runner.addedLabels[602]) != 0 {
 		t.Errorf("expected no additional labels added to PR 602, got %v", runner.addedLabels[602])
 	}
-	if len(runner.comments[602]) != 0 {
-		t.Errorf("expected no comments on PR 602, got %v", runner.comments[602])
+	if len(runner.requestedChanges[602]) != 0 {
+		t.Errorf("expected no requested changes on PR 602, got %v", runner.requestedChanges[602])
 	}
 
 	// 603 is a draft, so it must NOT be labeled as blocked
 	if len(runner.addedLabels[603]) != 0 {
 		t.Errorf("expected no labels added to draft PR 603, got %v", runner.addedLabels[603])
 	}
-	if len(runner.comments[603]) != 0 {
-		t.Errorf("expected no comments on draft PR 603, got %v", runner.comments[603])
+	if len(runner.requestedChanges[603]) != 0 {
+		t.Errorf("expected no requested changes on draft PR 603, got %v", runner.requestedChanges[603])
 	}
 }
 
