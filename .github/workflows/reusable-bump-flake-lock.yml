@@ -59,6 +59,10 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Why not omit ref:
+          # Without ref, actions/checkout checks out refs/pull/<pr>/merge on pull_request events.
+          # That makes the bot branch off a temporary merge commit instead of the base branch.
+          ref: ${{ github.event.repository.default_branch || github.ref_name }}
           fetch-depth: 0
           token: ${{ steps.publish-token.outputs.token }}
           # Avoid storing the GitHub App token in .git/config before post-commit-lock-file runs
