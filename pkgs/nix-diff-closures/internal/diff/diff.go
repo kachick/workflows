@@ -191,13 +191,14 @@ func (e *Engine) computeWhyDepends(ctx context.Context, headDrv string, diffText
 		}
 		seenDrv[drvPath] = true
 
+		verLabel := strings.TrimSuffix(pkg.Version, ".drv")
 		out, err := e.Exec.Run(ctx, "nix", "why-depends", "--derivation", headDrv, drvPath)
 		if err != nil {
-			b.WriteString(fmt.Sprintf("# why-depends for %s (%s): %v\n\n", pkg.Name, pkg.Version, err))
+			b.WriteString(fmt.Sprintf("# why-depends for %s (%s): %v\n\n", pkg.Name, verLabel, err))
 		} else {
-			trimmedOut := strings.TrimSpace(out)
+			trimmedOut := simplifyWhyDependsOutput(out)
 			if trimmedOut != "" {
-				b.WriteString(fmt.Sprintf("# why-depends for %s (%s)\n%s\n\n", pkg.Name, pkg.Version, trimmedOut))
+				b.WriteString(fmt.Sprintf("# why-depends for %s (%s)\n%s\n\n", pkg.Name, verLabel, trimmedOut))
 			}
 		}
 	}
@@ -232,6 +233,8 @@ var (
 	reRedPositiveSize = regexp.MustCompile(`\x1b\[31;1m([0-9])`)
 	// reANSI matches ANSI escape sequences like color codes.
 	reANSI = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+	// reStorePath matches /nix/store/<hash>-<name-version> and captures <name-version>.
+	reStorePath = regexp.MustCompile(`/nix/store/[^/\s-]+-([^\s]+)`)
 )
 
 // normalizeDiffOutput strips ANSI escape codes and adds '+' to positive sizes.
@@ -246,4 +249,30 @@ var (
 func normalizeDiffOutput(s string) string {
 	s = reRedPositiveSize.ReplaceAllString(s, "+$1")
 	return reANSI.ReplaceAllString(s, "")
+}
+
+// simplifyWhyDependsOutput strips ANSI codes, /nix/store/<hash>- prefixes, and .drv extensions.
+//
+// Why simplify store paths:
+// Raw 32-character hashes make up 80% of line width and obscure dependency relationships.
+// Showing package names and versions (pname-version) makes it easy to understand why
+// a package is pulled in without hash noise.
+func simplifyWhyDependsOutput(s string) string {
+	s = reANSI.ReplaceAllString(s, "")
+
+	s = reStorePath.ReplaceAllStringFunc(s, func(match string) string {
+		sub := reStorePath.FindStringSubmatch(match)
+		if len(sub) < 2 {
+			return match
+		}
+		name := sub[1]
+		return strings.TrimSuffix(name, ".drv")
+	})
+
+	var lines []string
+	for _, line := range strings.Split(s, "\n") {
+		lines = append(lines, strings.TrimRight(line, " \t\r"))
+	}
+
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }

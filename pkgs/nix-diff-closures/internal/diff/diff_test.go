@@ -203,3 +203,41 @@ func TestNormalizeDiffOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestSimplifyWhyDependsOutput(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty input returns empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name: "strips store path hashes, drv suffix, and ansi color escapes while preserving tree structure",
+			input: "/nix/store/rjd3ljb8a2mmbij81w6nb43d9xbydjfb-nix-shell.drv\n" +
+				"├───/nix/store/8bki9305rd0xf2qhdmcrqvg6rc6w8bai-nixd-2.9.3.drv \x1b[0m\n" +
+				"│   └───/nix/store/w1svn0lba9gv480i37z2q97yi4155mlr-python3-3.14.8.drv \x1b[0m\n" +
+				"│       └───/nix/store/qn2d17iznmnfg7jgr3yk1ik3nxgm7a92-Python-3.14.8.tar.xz.drv \x1b[0m\n" +
+				"└───/nix/store/5nq45dlmyhzbai6hzbwncpa1vwj1hhw5-typos-1.51.1.drv \x1b[0m\n" +
+				"    └───/nix/store/6r2dyi30n7cxgacql5sxv8n6kavcbscz-auditable-cargo-1.99.0.drv \x1b[0m\n",
+			expected: `nix-shell
+├───nixd-2.9.3
+│   └───python3-3.14.8
+│       └───Python-3.14.8.tar.xz
+└───typos-1.51.1
+    └───auditable-cargo-1.99.0`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := simplifyWhyDependsOutput(tt.input)
+			if got != tt.expected {
+				t.Fatalf("expected:\n%s\ngot:\n%s", tt.expected, got)
+			}
+		})
+	}
+}
