@@ -58,3 +58,27 @@ See [Distribute Schedules Across Repositories](../../README.md#distribute-schedu
 ```console
 nix run github:kachick/workflows#nix-diff-closures -- --help
 ```
+
+## Architecture Notes: Derivations vs. Runtime Closures
+
+`nix-diff-closures` inspects derivation graphs (`--derivation`) instead of realized runtime closures (`/nix/store/<hash>-...`).
+
+### Why Derivations Today (Fast and Evaluation-Only)
+
+- **Speed**: Derivations require only Nix expression evaluation. They finish in seconds without building anything.
+- **Runtime closures require building**: In Nix, runtime dependencies are determined only after scanning built files for store paths. Comparing runtime closures requires running `nix build` on both base and head revisions, which easily times out or exhausts disk in CI for full NixOS systems or large packages.
+
+### Ideal Differences by Target Type
+
+- **`devShells`**:
+  Derivation-level diffs are ideal. A devshell does not produce a deployed runtime artifact; its whole purpose is providing build-time and developer tools (`gcc`, `bash`, linters). Catching updates to those tools is the desired behavior.
+- **`nixosConfigurations` and `homeConfigurations`**:
+  Runtime closures are ideal. Transient bootstrap tools and build helpers do not remain on the deployed machine. Vulnerability gates and closure diffs should ideally monitor only the software that actually runs on the system.
+
+### Future Possibility: Post-Build Runtime Diffs
+
+For repositories that already build configurations in CI (such as `dotfiles` building NixOS and home-manager):
+
+- Inserting closure diffs after the build step would allow diffing exact runtime out paths.
+- Comparing against the base revision requires realizing the base configuration as well (or fetching it from a binary cache such as Cachix), potentially doubling build work.
+- When restricted to periodic update workflows (such as weekly `bump-flake-lock`), this trade-off may be worthwhile to eliminate build-time false alarms.
