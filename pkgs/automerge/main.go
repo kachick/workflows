@@ -958,7 +958,11 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 	}
 
 	if prRes.sourceCount == 0 {
-		return false, true, "skipped (no supported lockfiles found)", nil
+		reason := "skipped (no supported lockfiles found)"
+		if diffTouchesFlakeLock(diff) {
+			reason = "skipped (no supported lockfiles found; flake.lock is checked by nix-diff-closures)"
+		}
+		return false, true, reason, nil
 	}
 
 	baseSet := make(map[string]bool, len(s.baseResult.ids))
@@ -984,6 +988,15 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 
 	return false, false, fmt.Sprintf("no new vulnerabilities introduced (scanned sources: %d, base vulns: %d, pr vulns: %d)",
 		prRes.sourceCount, len(s.baseResult.ids), len(prRes.ids)), nil
+}
+
+func diffTouchesFlakeLock(diff string) bool {
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "diff --git ") && strings.Contains(line, "flake.lock") {
+			return true
+		}
+	}
+	return false
 }
 
 func findRepoRoot(ctx context.Context) (string, error) {

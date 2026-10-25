@@ -2002,6 +2002,71 @@ func TestFormatEvaluationStepsWithNeutral(t *testing.T) {
 	}
 }
 
+func TestDiffTouchesFlakeLock(t *testing.T) {
+	tests := []struct {
+		name     string
+		diff     string
+		expected bool
+	}{
+		{
+			name:     "empty diff",
+			diff:     "",
+			expected: false,
+		},
+		{
+			name: "diff touches go.mod only",
+			diff: `diff --git a/go.mod b/go.mod
+index 123..456 100644
+--- a/go.mod
++++ b/go.mod
+@@ -1 +1 @@
+-foo
++bar
+`,
+			expected: false,
+		},
+		{
+			name: "diff touches root flake.lock",
+			diff: `diff --git a/flake.lock b/flake.lock
+index 123..456 100644
+--- a/flake.lock
++++ b/flake.lock
+@@ -1 +1 @@
+-old
++new
+`,
+			expected: true,
+		},
+		{
+			name: "diff touches nested flake.lock",
+			diff: `diff --git a/sub/flake.lock b/sub/flake.lock
+index 123..456 100644
+--- a/sub/flake.lock
++++ b/sub/flake.lock
+`,
+			expected: true,
+		},
+		{
+			name: "flake.lock mentioned in commit message or content only",
+			diff: `diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
++See flake.lock for details
+`,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := diffTouchesFlakeLock(tt.diff)
+			if got != tt.expected {
+				t.Errorf("diffTouchesFlakeLock() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestFormatAuthor(t *testing.T) {
 	tests := []struct {
 		input    string

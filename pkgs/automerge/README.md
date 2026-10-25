@@ -51,7 +51,7 @@ Preserve the following invariants when modifying or extending `automerge`:
     - Because bot pull requests never receive Copilot reviews, requiring approvals will permanently block unattended merges for Dependabot and Renovate.
     - Keep `required_approving_review_count = 0` in personal repository rulesets to preserve unattended bot automerge.
 - **Why OSV-Scanner runs before LLM veto**:
-  - `osv-scanner` deterministically compares base and PR trees to catch newly introduced CVEs in lockfiles (`flake.lock`, `go.mod`, `Cargo.lock`, `package-lock.json`, etc.).
+  - `osv-scanner` deterministically compares base and PR trees to catch newly introduced CVEs in supported lockfiles (`go.mod`, `Cargo.lock`, `package-lock.json`, etc.). Note that `flake.lock` is not directly supported by `osv-scanner` and is inspected by `nix-diff-closures` instead.
   - Running this check first rejects known vulnerabilities immediately without spending LLM API tokens.
 - **Why negative labels are attached on block or veto**:
   - Tagging `automerge:vetoed` prevents subsequent polling runs from calling the LLM API repeatedly on the same rejected diff. Removing the label re-enables evaluation on the next run after updating the review bot or pushing new commits.
