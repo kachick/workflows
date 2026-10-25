@@ -367,7 +367,10 @@ func run() error {
 			}
 		}
 
-		if err := client.PostComment(ctx, owner, repoName, prNumber, rep.CommentMarkdown); err != nil {
+		// Second critical guardrail after leak checking: enforce safe length before API call to prevent 422 errors
+		commentToPost := report.EnsureSafeCommentLength(rep.CommentMarkdown, meta)
+
+		if err := client.PostComment(ctx, owner, repoName, prNumber, commentToPost); err != nil {
 			if errors.Is(err, gh.ErrPermissionDenied) {
 				fmt.Fprintln(os.Stderr, "::warning::GitHub token lacks permission to post PR comment. Diff was posted to Step Summary instead.")
 				return nil

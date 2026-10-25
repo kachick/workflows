@@ -57,6 +57,14 @@ libfoo: 1.2 → 1.3, 1.4
 				{Name: "libfoo", Version: "1.4"},
 			},
 		},
+		{
+			name: "ignores patch file derivation tokens in closure diffs",
+			diffText: `
+chromium: 141-rust.patch, 148-revert.patch.drv → ∅, -17.3 KiB
+archlinux-chromium: 146-drop-unknown-clang-flag.patch.drv → ∅
+`,
+			expected: nil,
+		},
 	}
 
 	for _, tt := range tests {

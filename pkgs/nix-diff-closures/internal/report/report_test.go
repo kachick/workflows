@@ -1,6 +1,7 @@
 package report
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -235,7 +236,7 @@ func TestBuildReport(t *testing.T) {
 			},
 		}
 
-		rep, err := Build(results, vulnRes, 1000, 500, completeMeta, true)
+		rep, err := Build(results, vulnRes, DefaultMaxSize, DefaultHeadSize, completeMeta, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -276,7 +277,7 @@ func TestBuildReport(t *testing.T) {
 			},
 		}
 
-		rep, err := Build(results, vulnRes, 1000, 500, completeMeta, true)
+		rep, err := Build(results, vulnRes, DefaultMaxSize, DefaultHeadSize, completeMeta, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -329,7 +330,7 @@ func TestBuildReport(t *testing.T) {
 			},
 		}
 
-		rep, err := Build(results, vulnRes, 1000, 500, completeMeta, true)
+		rep, err := Build(results, vulnRes, DefaultMaxSize, DefaultHeadSize, completeMeta, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -371,6 +372,122 @@ func TestBuildReport(t *testing.T) {
 		}
 		if !strings.Contains(rep.CommentMarkdown, "````text\nError: evaluation failed: unexpected </details> and ``` in trace\n````") {
 			t.Errorf("expected 4-backtick code fence around error containing 3 backticks, got:\n%s", rep.CommentMarkdown)
+		}
+	})
+
+	t.Run("limits displayed CVE links per package and summarizes excess", func(t *testing.T) {
+		results := []TargetResult{
+			{
+				Target:   "devShells.x86_64-linux.default",
+				DiffText: "curl: 8.4.0 → 8.5.0\n",
+			},
+		}
+		var vulns []osv.Vulnerability
+		for i := 1; i <= 15; i++ {
+			vulns = append(vulns, osv.Vulnerability{ID: fmt.Sprintf("CVE-2026-%05d", i)})
+		}
+		vulnRes := VulnerabilityResult{
+			Checked: true,
+			NewVulns: []osv.PackageVulnerabilities{
+				{
+					Package:         osv.Package{Name: "curl", Version: "8.5.0"},
+					Vulnerabilities: vulns,
+				},
+			},
+		}
+
+		rep, err := Build(results, vulnRes, 10000, 5000, completeMeta, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Should show first 5
+		for i := 1; i <= 5; i++ {
+			expectedLink := fmt.Sprintf("https://osv.dev/vulnerability/CVE-2026-%05d", i)
+			if !strings.Contains(rep.CommentMarkdown, expectedLink) {
+				t.Fatalf("expected CVE link %q in comment", expectedLink)
+			}
+		}
+		// Should not show 6th in comment
+		unexpectedLink := "https://osv.dev/vulnerability/CVE-2026-00006"
+		if strings.Contains(rep.CommentMarkdown, unexpectedLink) {
+			t.Fatalf("unexpected 6th CVE link in comment: %s", rep.CommentMarkdown)
+		}
+		if !strings.Contains(rep.CommentMarkdown, "and 10 more (see `vulnerabilities.txt` artifact)") {
+			t.Fatalf("expected excess summary in comment, got:\n%s", rep.CommentMarkdown)
+		}
+		// Full report should still have all 15
+		for i := 1; i <= 15; i++ {
+			cveID := fmt.Sprintf("CVE-2026-%05d", i)
+			if !strings.Contains(rep.FullVulnerabilitiesText, cveID) {
+				t.Fatalf("expected CVE %q in full text", cveID)
+			}
+		}
+	})
+
+	t.Run("truncates long target error output", func(t *testing.T) {
+		longError := strings.Repeat("nix evaluation error trace line\n", 200) // ~6400 bytes
+		results := []TargetResult{
+			{
+				Target:   "devShells.x86_64-linux.default",
+				DiffText: "pkg: 1.0 → 2.0\n",
+			},
+			{
+				Target: "packages.x86_64-linux.broken",
+				Error:  longError,
+			},
+		}
+		rep, err := Build(results, VulnerabilityResult{}, 10000, 5000, completeMeta, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(rep.CommentMarkdown, "... (truncated error, see CI log)") {
+			t.Fatal("expected truncated error marker in comment markdown")
+		}
+		if len(rep.CommentMarkdown) > 5000 {
+			t.Fatalf("comment markdown too large for truncated error: %d bytes", len(rep.CommentMarkdown))
+		}
+	})
+}
+
+func TestEnsureSafeCommentLength(t *testing.T) {
+	completeMeta := workflowmeta.Metadata{
+		ServerURL:          "https://github.com",
+		Repository:         "kachick/workflows",
+		RunID:              "12345678",
+		WorkflowRepository: "kachick/workflows",
+		WorkflowSHA:        "0123456789abcdef",
+		WorkflowFilePath:   ".github/workflows/reusable-nix-diff-closures.yml",
+	}
+
+	t.Run("returns original comment when within safe limit", func(t *testing.T) {
+		comment := "### ❄️ Nix Store Diff\n<!-- nix-diff-closures-report -->\n\nShort comment."
+		got := EnsureSafeCommentLength(comment, completeMeta)
+		if got != comment {
+			t.Fatalf("expected unchanged comment, got: %s", got)
+		}
+	})
+
+	t.Run("guarantees safe size when comment exceeds limit", func(t *testing.T) {
+		giantComment := strings.Repeat("a very long comment line that exceeds limits\n", 2000) // ~90 KB
+		got := EnsureSafeCommentLength(giantComment, completeMeta)
+
+		if utf8.RuneCountInString(got) > SafeCommentLimit {
+			t.Fatalf("expected runes <= %d, got %d", SafeCommentLimit, utf8.RuneCountInString(got))
+		}
+		if len(got) > SafeCommentLimit {
+			t.Fatalf("expected bytes <= %d, got %d", SafeCommentLimit, len(got))
+		}
+		if !strings.Contains(got, Marker) {
+			t.Fatal("marker missing in fallback comment")
+		}
+		if !strings.Contains(got, "> [!WARNING]") {
+			t.Fatal("warning alert missing in fallback comment")
+		}
+		if !strings.Contains(got, "exceeded GitHub size limits") {
+			t.Fatal("size limit warning text missing")
+		}
+		if !strings.Contains(got, "... (truncated)") {
+			t.Fatal("truncated marker missing")
 		}
 	})
 }

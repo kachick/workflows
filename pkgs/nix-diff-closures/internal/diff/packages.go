@@ -95,6 +95,11 @@ func parseVersions(part string) []string {
 		if (strings.HasPrefix(t, "+") || strings.HasPrefix(t, "-")) && strings.HasSuffix(t, "B") {
 			continue
 		}
+		// Patch files (e.g. "141-rust.patch", "fix.patch.drv") appear as derivation tokens in closure diffs.
+		// These are build patches rather than package versions; querying OSV with them causes false queries.
+		if strings.Contains(t, ".patch") {
+			continue
+		}
 		rawVersions = append(rawVersions, t)
 	}
 	return rawVersions
