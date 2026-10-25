@@ -121,7 +121,7 @@ func (c *Client) QueryBatch(ctx context.Context, pkgs []Package) ([]PackageVulne
 
 	var affected []PackageVulnerabilities
 	for i, r := range res.Results {
-		filtered := FilterDistroAdvisories(r.Vulns)
+		filtered := FilterAllowedAdvisories(r.Vulns)
 		if len(filtered) > 0 {
 			affected = append(affected, PackageVulnerabilities{
 				Package:         pkgs[i],
@@ -133,40 +133,35 @@ func (c *Client) QueryBatch(ctx context.Context, pkgs []Package) ([]PackageVulne
 	return affected, nil
 }
 
-// distroAdvisoryPrefixes lists advisory ID prefixes from Linux distributions.
-// Why not include distro trackers:
-// Nix builds packages from upstream source versions without distro epoch numbers.
-// Distribution trackers (Debian, Ubuntu, Red Hat, SUSE, Alpine) use package versions
-// with their own epoch and revision numbers (for example, dpkg "2:1.6.2-...").
-// When OSV compares upstream versions against distro feeds using dpkg/rpm rules,
-// upstream packages (such as libx11 1.8.14) falsely match against old fixed vulnerabilities
-// because epoch 0 is treated as older than epoch 2.
+// allowedAdvisoryPrefixes defines advisory ID prefixes that are trusted for Nix derivations.
 //
-// Known problems / FIXME:
-//  1. OSV querybatch does not support filtering by ecosystem without per-package ecosystem requests.
-//     If OSV adds ecosystem filtering to batch queries, consider querying only desired ecosystems.
-//  2. If ancient false positives still appear from generic CVE feeds, consider filtering by CVE year
-//     (Approach B: dropping CVEs from many years before the package release).
-var distroAdvisoryPrefixes = []string{
-	"DEBIAN-",
-	"DLA-",
-	"DSA-",
-	"UBUNTU-",
-	"USN-",
-	"ALMA-",
-	"RLSA-",
-	"RHSA-",
-	"RHBA-",
-	"RHEA-",
-	"SUSE-",
-	"OPENSUSE-",
-	"ALPINE-",
+// Why opt-in instead of opt-out:
+// At first glance, opt-in looks risky because it drops unfamiliar advisory feeds.
+// However, an opt-out blacklist is impossible to maintain and fails in practice for Nix:
+//  1. Linux distro feeds (Debian, Ubuntu, Red Hat, Echo, Mageia, openEuler, etc.)
+//     use package versions with distro-specific epochs and revisions (for example, dpkg "2:1.6.2-...").
+//     Nix evaluates upstream source tarballs (epoch 0).
+//     OSV evaluates distro feeds using dpkg/rpm rules, so modern upstream packages (like libx11 1.8.14)
+//     falsely match decade-old fixed vulnerabilities (epoch 0 < epoch 2).
+//     OSV continually adds new distro feeds (ECHO, BELL, ROOT-OS, CLSA, ALSA), making blacklists futile.
+//  2. OSV batch queries search by package name alone without an ecosystem.
+//     Nix packages frequently collide with unrelated packages in other ecosystems.
+//     For example, GNU gcc matched RUSTSEC-2025-0121 (an obsolete crates.io crate named "gcc"),
+//     and pcre2 matched PYSEC (a Python package named "pcre2").
+//
+// Until OSV supports a first-class Nix/NixOS ecosystem or ecosystem-constrained batch queries,
+// we strictly allow only generic and ecosystem-audited feeds (GHSA, CVE, OSV).
+// Real-world package vulnerabilities (such as Electron and pnpm CVEs/advisories) arrive via GHSA and CVE.
+var allowedAdvisoryPrefixes = []string{
+	"GHSA-",
+	"CVE-",
+	"OSV-",
 }
 
-// IsDistroAdvisoryID reports whether the advisory ID comes from a Linux distribution security tracker.
-func IsDistroAdvisoryID(id string) bool {
+// IsAllowedAdvisoryID reports whether the advisory ID comes from a trusted general advisory database.
+func IsAllowedAdvisoryID(id string) bool {
 	upper := strings.ToUpper(id)
-	for _, prefix := range distroAdvisoryPrefixes {
+	for _, prefix := range allowedAdvisoryPrefixes {
 		if strings.HasPrefix(upper, prefix) {
 			return true
 		}
@@ -174,14 +169,14 @@ func IsDistroAdvisoryID(id string) bool {
 	return false
 }
 
-// FilterDistroAdvisories returns a new slice omitting advisories from Linux distribution trackers.
-func FilterDistroAdvisories(vulns []Vulnerability) []Vulnerability {
+// FilterAllowedAdvisories returns a new slice retaining only advisories with allowed prefixes.
+func FilterAllowedAdvisories(vulns []Vulnerability) []Vulnerability {
 	if len(vulns) == 0 {
 		return nil
 	}
 	filtered := make([]Vulnerability, 0, len(vulns))
 	for _, v := range vulns {
-		if !IsDistroAdvisoryID(v.ID) {
+		if IsAllowedAdvisoryID(v.ID) {
 			filtered = append(filtered, v)
 		}
 	}
