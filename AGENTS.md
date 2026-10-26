@@ -6,6 +6,7 @@
 - Rules here are preferred guidelines; requirements in `README.md` and `NOTES.md` always take priority.
 - If instructions here conflict with requirements in `README.md` or `NOTES.md`, ask the human maintainer before taking action.
 - Write only things that humans rarely get wrong but LLMs often miss, adapting to maintainer preferences.
+- Design security boundaries and allowlists to fail-closed: reject or skip on unexpected inputs, errors, or uncertainty.
 
 ## Documentation Boundaries
 
