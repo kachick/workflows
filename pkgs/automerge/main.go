@@ -22,15 +22,15 @@ import (
 	"github.com/kachick/workflows/internal/workflowmeta"
 )
 
+// Why use app/<slug> logins:
+// gh CLI (`gh pr list --json author`) outputs GitHub App logins with the "app/" prefix.
+// While GitHub REST API uses "<slug>[bot]", gh CLI consistently converts bot actors to "app/<slug>".
+// Keeping only the exact "app/<slug>" pattern avoids redundant definitions and prevents unexpected matches.
 var defaultAllowedBots = []string{
 	"app/dependabot",
-	"dependabot[bot]",
 	"app/renovate",
-	"renovate[bot]",
 	"app/samuebot",
-	"samuebot[bot]",
 	"app/copilot-swe-agent",
-	"copilot-swe-agent[bot]",
 }
 
 var (

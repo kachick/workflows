@@ -189,7 +189,7 @@ func TestIsEligible(t *testing.T) {
 		Number:            1,
 		Title:             "Update dependency",
 		Body:              validRenovateBody,
-		Author:            Author{Login: "renovate[bot]"},
+		Author:            Author{Login: "app/renovate"},
 		IsDraft:           false,
 		Mergeable:         "MERGEABLE",
 		StatusCheckRollup: validChecks,
@@ -204,6 +204,13 @@ func TestIsEligible(t *testing.T) {
 	unallowedAuthor.Author.Login = "attacker[bot]"
 	if isEligible(unallowedAuthor, defaultAllowedBots, "") {
 		t.Errorf("unallowed author should not be eligible")
+	}
+
+	// Bot accounts formatted with [bot] instead of app/ must be rejected (fail-closed)
+	botFormatPR := basePR
+	botFormatPR.Author.Login = "dependabot[bot]"
+	if isEligible(botFormatPR, defaultAllowedBots, "") {
+		t.Errorf("author formatted with [bot] should not match app/ allowlist")
 	}
 
 	// Draft PR
@@ -283,7 +290,7 @@ func TestIsEligible(t *testing.T) {
 
 	// Dependabot major bump (disallowed)
 	dependabotMajorPR := basePR
-	dependabotMajorPR.Author.Login = "dependabot[bot]"
+	dependabotMajorPR.Author.Login = "app/dependabot"
 	dependabotMajorPR.Title = "Bump actions/checkout from 3.0.0 to 4.0.0"
 	if isEligible(dependabotMajorPR, defaultAllowedBots, "") {
 		t.Errorf("Dependabot major bump should not be eligible")
@@ -291,7 +298,7 @@ func TestIsEligible(t *testing.T) {
 
 	// Dependabot minor bump (eligible)
 	dependabotMinorPR := basePR
-	dependabotMinorPR.Author.Login = "dependabot[bot]"
+	dependabotMinorPR.Author.Login = "app/dependabot"
 	dependabotMinorPR.Title = "Bump actions/checkout from 4.0.0 to 4.1.0"
 	if !isEligible(dependabotMinorPR, defaultAllowedBots, "") {
 		t.Errorf("Dependabot minor bump should be eligible")
@@ -299,7 +306,7 @@ func TestIsEligible(t *testing.T) {
 
 	// Dependabot subdirectory minor bump (eligible)
 	dependabotSubdirMinorPR := basePR
-	dependabotSubdirMinorPR.Author.Login = "dependabot[bot]"
+	dependabotSubdirMinorPR.Author.Login = "app/dependabot"
 	dependabotSubdirMinorPR.Title = "Bump actions/checkout from 4.0.0 to 4.1.0 in /.github/workflows"
 	if !isEligible(dependabotSubdirMinorPR, defaultAllowedBots, "") {
 		t.Errorf("Dependabot subdirectory minor bump should be eligible")
@@ -307,7 +314,7 @@ func TestIsEligible(t *testing.T) {
 
 	// Dependabot subdirectory major bump (disallowed)
 	dependabotSubdirMajorPR := basePR
-	dependabotSubdirMajorPR.Author.Login = "dependabot[bot]"
+	dependabotSubdirMajorPR.Author.Login = "app/dependabot"
 	dependabotSubdirMajorPR.Title = "Bump actions/checkout from 3.0.0 to 4.0.0 in /.github/workflows"
 	if isEligible(dependabotSubdirMajorPR, defaultAllowedBots, "") {
 		t.Errorf("Dependabot subdirectory major bump should not be eligible")
@@ -315,7 +322,7 @@ func TestIsEligible(t *testing.T) {
 
 	// Dependabot group update (disallowed)
 	dependabotGroupPR := basePR
-	dependabotGroupPR.Author.Login = "dependabot[bot]"
+	dependabotGroupPR.Author.Login = "app/dependabot"
 	dependabotGroupPR.Title = "Bump the rust group with 2 updates"
 	if isEligible(dependabotGroupPR, defaultAllowedBots, "") {
 		t.Errorf("Dependabot group update should not be eligible")
@@ -323,7 +330,7 @@ func TestIsEligible(t *testing.T) {
 
 	// Dependabot cachix major bump (disallowed)
 	dependabotCachixPR := basePR
-	dependabotCachixPR.Author.Login = "dependabot[bot]"
+	dependabotCachixPR.Author.Login = "app/dependabot"
 	dependabotCachixPR.Title = "Bump cachix/cachix-action from 14 to 15"
 	if isEligible(dependabotCachixPR, defaultAllowedBots, "") {
 		t.Errorf("Dependabot cachix major bump should not be eligible")
@@ -331,7 +338,7 @@ func TestIsEligible(t *testing.T) {
 
 	// Renovate major bump (disallowed)
 	renovateMajorPR := basePR
-	renovateMajorPR.Author.Login = "renovate[bot]"
+	renovateMajorPR.Author.Login = "app/renovate"
 	renovateMajorPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [actions/checkout](https://example.com) | major | `3.0.0` -> `4.0.0` |\n"
 	if isEligible(renovateMajorPR, defaultAllowedBots, "") {
 		t.Errorf("Renovate major bump should not be eligible")
@@ -339,7 +346,7 @@ func TestIsEligible(t *testing.T) {
 
 	// Renovate 0.x minor bump (eligible)
 	renovate0xPR := basePR
-	renovate0xPR.Author.Login = "renovate[bot]"
+	renovate0xPR.Author.Login = "app/renovate"
 	renovate0xPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [dprint/dprint-plugin-markdown](https://example.com) | minor | `0.24.0` → `0.26.0` |\n"
 	if !isEligible(renovate0xPR, defaultAllowedBots, "") {
 		t.Errorf("Renovate 0.x bump should be eligible")
@@ -347,7 +354,7 @@ func TestIsEligible(t *testing.T) {
 
 	// Renovate unrecognized body (disallowed)
 	renovateInvalidBodyPR := basePR
-	renovateInvalidBodyPR.Author.Login = "renovate[bot]"
+	renovateInvalidBodyPR.Author.Login = "app/renovate"
 	renovateInvalidBodyPR.Body = "Unrecognized body without table"
 	if isEligible(renovateInvalidBodyPR, defaultAllowedBots, "") {
 		t.Errorf("Renovate unrecognized body should not be eligible")
@@ -582,7 +589,7 @@ func TestExecute(t *testing.T) {
 				Number:            101,
 				Title:             "Renovate PR",
 				Body:              validRenovateBody,
-				Author:            Author{Login: "renovate[bot]"},
+				Author:            Author{Login: "app/renovate"},
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
 			},
@@ -590,7 +597,7 @@ func TestExecute(t *testing.T) {
 				Number:            102,
 				Title:             "Draft PR",
 				Body:              validRenovateBody,
-				Author:            Author{Login: "renovate[bot]"},
+				Author:            Author{Login: "app/renovate"},
 				IsDraft:           true,
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
@@ -598,7 +605,7 @@ func TestExecute(t *testing.T) {
 			{
 				Number:            103,
 				Title:             "Samuebot PR",
-				Author:            Author{Login: "samuebot[bot]"},
+				Author:            Author{Login: "app/samuebot"},
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
 			},
@@ -644,7 +651,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 			Number:            201,
 			Title:             "Safe renovate PR",
 			Body:              validRenovateBody,
-			Author:            Author{Login: "renovate[bot]"},
+			Author:            Author{Login: "app/renovate"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
 		},
@@ -652,7 +659,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 			Number:            202,
 			Title:             "Breaking renovate PR",
 			Body:              validRenovateBody,
-			Author:            Author{Login: "renovate[bot]"},
+			Author:            Author{Login: "app/renovate"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
 		},
@@ -660,7 +667,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 			Number:            203,
 			Title:             "Flaky API renovate PR",
 			Body:              validRenovateBody,
-			Author:            Author{Login: "renovate[bot]"},
+			Author:            Author{Login: "app/renovate"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
 		},
@@ -668,7 +675,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 			Number:            204,
 			Title:             "Diff error renovate PR",
 			Body:              validRenovateBody,
-			Author:            Author{Login: "renovate[bot]"},
+			Author:            Author{Login: "app/renovate"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
 		},
@@ -765,7 +772,7 @@ func TestExecuteLLMVeto(t *testing.T) {
 			Number:            202,
 			Title:             "Breaking renovate PR",
 			Body:              validRenovateBody,
-			Author:            Author{Login: "renovate[bot]"},
+			Author:            Author{Login: "app/renovate"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
 			Labels:            []Label{{Name: vetoLabelName}},
@@ -794,7 +801,7 @@ func TestExecuteLLMVetoMissingAPIKey(t *testing.T) {
 				Number:            301,
 				Title:             "Renovate PR",
 				Body:              validRenovateBody,
-				Author:            Author{Login: "renovate[bot]"},
+				Author:            Author{Login: "app/renovate"},
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
 			},
@@ -946,7 +953,7 @@ func TestGeminiReviewerHTTP(t *testing.T) {
 		pr := PullRequest{
 			Number: 1,
 			Title:  "Bump foo from 1.0.0 to 1.0.1",
-			Author: Author{Login: "dependabot[bot]"},
+			Author: Author{Login: "app/dependabot"},
 			Body:   "Release notes: fix bug",
 		}
 
@@ -992,7 +999,7 @@ func TestGeminiReviewerHTTP(t *testing.T) {
 		pr := PullRequest{
 			Number: 2,
 			Title:  "Bump bar from 1.0.0 to 2.0.0",
-			Author: Author{Login: "dependabot[bot]"},
+			Author: Author{Login: "app/dependabot"},
 			Body:   "Breaking changes: removed foo()",
 		}
 
@@ -1209,7 +1216,7 @@ func TestCheckEligibility(t *testing.T) {
 		Number:            1,
 		Title:             "Update dependency",
 		Body:              validRenovateBody,
-		Author:            Author{Login: "renovate[bot]"},
+		Author:            Author{Login: "app/renovate"},
 		IsDraft:           false,
 		Mergeable:         "MERGEABLE",
 		StatusCheckRollup: validChecks,
@@ -1222,14 +1229,14 @@ func TestCheckEligibility(t *testing.T) {
 	}
 
 	dependabot0xPR := basePR
-	dependabot0xPR.Author.Login = "dependabot[bot]"
+	dependabot0xPR.Author.Login = "app/dependabot"
 	dependabot0xPR.Title = "Bump golang.org/x/sys from 0.48.0 to 0.49.0"
 	if res := checkEligibility(dependabot0xPR, defaultAllowedBots, "", meta); !res.Eligible {
 		t.Fatalf("expected dependabot 0.x bump to be eligible, got reason=%q", res.Reason)
 	}
 
 	renovate0xPR := basePR
-	renovate0xPR.Author.Login = "renovate[bot]"
+	renovate0xPR.Author.Login = "app/renovate"
 	renovate0xPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [dprint/dprint-plugin-markdown](https://example.com) | minor | `0.24.0` → `0.26.0` |\n"
 	if res := checkEligibility(renovate0xPR, defaultAllowedBots, "", meta); !res.Eligible {
 		t.Fatalf("expected renovate 0.x bump to be eligible, got reason=%q", res.Reason)
@@ -1327,7 +1334,7 @@ func TestCheckEligibility(t *testing.T) {
 		{
 			name: "dependabot major update",
 			modify: func(pr *PullRequest) {
-				pr.Author.Login = "dependabot[bot]"
+				pr.Author.Login = "app/dependabot"
 				pr.Title = "Bump actions/checkout from 3.0.0 to 4.0.0"
 			},
 			wantReason:  "disallowed dependabot bump: major update (3.0.0 -> 4.0.0)",
@@ -1336,7 +1343,7 @@ func TestCheckEligibility(t *testing.T) {
 		{
 			name: "renovate major update",
 			modify: func(pr *PullRequest) {
-				pr.Author.Login = "renovate[bot]"
+				pr.Author.Login = "app/renovate"
 				pr.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [actions/checkout](https://example.com) | major | `3.0.0` -> `4.0.0` |\n"
 			},
 			wantReason:  "disallowed renovate bump: major update (3.0.0 -> 4.0.0)",
@@ -1345,7 +1352,7 @@ func TestCheckEligibility(t *testing.T) {
 		{
 			name: "renovate unrecognized body",
 			modify: func(pr *PullRequest) {
-				pr.Author.Login = "renovate[bot]"
+				pr.Author.Login = "app/renovate"
 				pr.Body = "Unrecognized body without table"
 			},
 			wantReason:  "disallowed renovate bump: unrecognized body format or no update rows found",
@@ -1630,7 +1637,7 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 			Number:            401,
 			Title:             "Clean dependency update",
 			Body:              validRenovateBody,
-			Author:            Author{Login: "renovate[bot]"},
+			Author:            Author{Login: "app/renovate"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
 		},
@@ -1638,7 +1645,7 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 			Number:            402,
 			Title:             "Vulnerable dependency update",
 			Body:              validRenovateBody,
-			Author:            Author{Login: "renovate[bot]"},
+			Author:            Author{Login: "app/renovate"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
 		},
@@ -1646,7 +1653,7 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 			Number:            403,
 			Title:             "Scanner error update",
 			Body:              validRenovateBody,
-			Author:            Author{Login: "renovate[bot]"},
+			Author:            Author{Login: "app/renovate"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
 		},
@@ -1654,7 +1661,7 @@ func TestExecuteVulnerabilityScan(t *testing.T) {
 			Number:            404,
 			Title:             "No lockfile update",
 			Body:              validRenovateBody,
-			Author:            Author{Login: "renovate[bot]"},
+			Author:            Author{Login: "app/renovate"},
 			Mergeable:         "MERGEABLE",
 			StatusCheckRollup: validChecks,
 		},
@@ -1791,7 +1798,7 @@ func TestExecutePostsMergeComment(t *testing.T) {
 				Number:            501,
 				Title:             "Merged PR",
 				Body:              validRenovateBody,
-				Author:            Author{Login: "renovate[bot]"},
+				Author:            Author{Login: "app/renovate"},
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
 			},
@@ -1799,7 +1806,7 @@ func TestExecutePostsMergeComment(t *testing.T) {
 				Number:            502,
 				Title:             "Failed merge PR",
 				Body:              validRenovateBody,
-				Author:            Author{Login: "renovate[bot]"},
+				Author:            Author{Login: "app/renovate"},
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
 			},
@@ -1859,14 +1866,14 @@ func TestExecuteLabelsBlockedPR(t *testing.T) {
 			{
 				Number:            601,
 				Title:             "Bump actions/checkout from 3.0.0 to 4.0.0", // Dependabot major -> blocked
-				Author:            Author{Login: "dependabot[bot]"},
+				Author:            Author{Login: "app/dependabot"},
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
 			},
 			{
 				Number:            602,
 				Title:             "Bump actions/checkout from 3.0.0 to 4.0.0", // Already blocked
-				Author:            Author{Login: "dependabot[bot]"},
+				Author:            Author{Login: "app/dependabot"},
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
 				Labels:            []Label{{Name: blockedLabelName}},
@@ -1874,7 +1881,7 @@ func TestExecuteLabelsBlockedPR(t *testing.T) {
 			{
 				Number:            603,
 				Title:             "Draft PR", // Transient skip -> must NOT be labeled
-				Author:            Author{Login: "dependabot[bot]"},
+				Author:            Author{Login: "app/dependabot"},
 				IsDraft:           true,
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
@@ -2188,7 +2195,7 @@ func TestExecuteWritesStepSummary(t *testing.T) {
 				Number:            701,
 				Title:             "Merged PR",
 				Body:              validRenovateBody,
-				Author:            Author{Login: "renovate[bot]"},
+				Author:            Author{Login: "app/renovate"},
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
 			},
@@ -2231,7 +2238,7 @@ func TestShouldRetryMergeable(t *testing.T) {
 	basePR := PullRequest{
 		Number:      100,
 		Title:       "Bump test package",
-		Author:      Author{Login: "renovate[bot]"},
+		Author:      Author{Login: "app/renovate"},
 		IsDraft:     false,
 		Mergeable:   "UNKNOWN",
 		Labels:      []Label{},
@@ -2282,7 +2289,7 @@ func TestExecuteRetriesUnknownMergeable(t *testing.T) {
 		initialPR := PullRequest{
 			Number:            801,
 			Title:             "Bump foo from 1.0.0 to 1.1.0",
-			Author:            Author{Login: "dependabot[bot]"},
+			Author:            Author{Login: "app/dependabot"},
 			IsDraft:           false,
 			Mergeable:         "UNKNOWN",
 			StatusCheckRollup: validChecks,
@@ -2320,7 +2327,7 @@ func TestExecuteRetriesUnknownMergeable(t *testing.T) {
 		initialPR := PullRequest{
 			Number:            802,
 			Title:             "Bump foo from 1.0.0 to 1.1.0",
-			Author:            Author{Login: "dependabot[bot]"},
+			Author:            Author{Login: "app/dependabot"},
 			IsDraft:           false,
 			Mergeable:         "UNKNOWN",
 			StatusCheckRollup: validChecks,
@@ -2390,7 +2397,7 @@ func TestExecuteLogGrouping(t *testing.T) {
 				Number:            901,
 				Title:             "Grouped bot PR",
 				Body:              validRenovateBody,
-				Author:            Author{Login: "renovate[bot]"},
+				Author:            Author{Login: "app/renovate"},
 				Mergeable:         "MERGEABLE",
 				StatusCheckRollup: validChecks,
 			},
