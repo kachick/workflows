@@ -195,35 +195,35 @@ func TestIsEligible(t *testing.T) {
 		StatusCheckRollup: validChecks,
 	}
 
-	if !isEligible(basePR, defaultAllowedBots) {
+	if !isEligible(basePR, defaultAllowedBots, "") {
 		t.Errorf("expected basePR to be eligible")
 	}
 
 	// Not allowed author
 	unallowedAuthor := basePR
 	unallowedAuthor.Author.Login = "attacker[bot]"
-	if isEligible(unallowedAuthor, defaultAllowedBots) {
+	if isEligible(unallowedAuthor, defaultAllowedBots, "") {
 		t.Errorf("unallowed author should not be eligible")
 	}
 
 	// Draft PR
 	draftPR := basePR
 	draftPR.IsDraft = true
-	if isEligible(draftPR, defaultAllowedBots) {
+	if isEligible(draftPR, defaultAllowedBots, "") {
 		t.Errorf("draft PR should not be eligible")
 	}
 
 	// Not mergeable
 	conflictPR := basePR
 	conflictPR.Mergeable = "CONFLICTING"
-	if isEligible(conflictPR, defaultAllowedBots) {
+	if isEligible(conflictPR, defaultAllowedBots, "") {
 		t.Errorf("conflicting PR should not be eligible")
 	}
 
 	// Empty checks
 	noChecksPR := basePR
 	noChecksPR.StatusCheckRollup = []StatusCheckItem{}
-	if isEligible(noChecksPR, defaultAllowedBots) {
+	if isEligible(noChecksPR, defaultAllowedBots, "") {
 		t.Errorf("PR without checks should not be eligible")
 	}
 
@@ -232,7 +232,7 @@ func TestIsEligible(t *testing.T) {
 	inProgressPR.StatusCheckRollup = []StatusCheckItem{
 		{Status: "IN_PROGRESS", Conclusion: ""},
 	}
-	if isEligible(inProgressPR, defaultAllowedBots) {
+	if isEligible(inProgressPR, defaultAllowedBots, "") {
 		t.Errorf("PR with in-progress checks should not be eligible")
 	}
 
@@ -241,7 +241,7 @@ func TestIsEligible(t *testing.T) {
 	failedPR.StatusCheckRollup = []StatusCheckItem{
 		{Status: "COMPLETED", Conclusion: "FAILURE"},
 	}
-	if isEligible(failedPR, defaultAllowedBots) {
+	if isEligible(failedPR, defaultAllowedBots, "") {
 		t.Errorf("PR with failed checks should not be eligible")
 	}
 
@@ -250,7 +250,7 @@ func TestIsEligible(t *testing.T) {
 	skippedPR.StatusCheckRollup = []StatusCheckItem{
 		{Status: "COMPLETED", Conclusion: "SKIPPED"},
 	}
-	if !isEligible(skippedPR, defaultAllowedBots) {
+	if !isEligible(skippedPR, defaultAllowedBots, "") {
 		t.Errorf("PR with skipped checks should be eligible")
 	}
 
@@ -259,7 +259,7 @@ func TestIsEligible(t *testing.T) {
 	neutralPR.StatusCheckRollup = []StatusCheckItem{
 		{Status: "COMPLETED", Conclusion: "NEUTRAL"},
 	}
-	if !isEligible(neutralPR, defaultAllowedBots) {
+	if !isEligible(neutralPR, defaultAllowedBots, "") {
 		t.Errorf("PR with neutral checks should be eligible")
 	}
 
@@ -268,7 +268,7 @@ func TestIsEligible(t *testing.T) {
 	timedOutPR.StatusCheckRollup = []StatusCheckItem{
 		{Status: "COMPLETED", Conclusion: "TIMED_OUT"},
 	}
-	if isEligible(timedOutPR, defaultAllowedBots) {
+	if isEligible(timedOutPR, defaultAllowedBots, "") {
 		t.Errorf("PR with timed out checks should not be eligible")
 	}
 
@@ -277,7 +277,7 @@ func TestIsEligible(t *testing.T) {
 	cancelledPR.StatusCheckRollup = []StatusCheckItem{
 		{Status: "COMPLETED", Conclusion: "CANCELLED"},
 	}
-	if isEligible(cancelledPR, defaultAllowedBots) {
+	if isEligible(cancelledPR, defaultAllowedBots, "") {
 		t.Errorf("PR with cancelled checks should not be eligible")
 	}
 
@@ -285,7 +285,7 @@ func TestIsEligible(t *testing.T) {
 	dependabotMajorPR := basePR
 	dependabotMajorPR.Author.Login = "dependabot[bot]"
 	dependabotMajorPR.Title = "Bump actions/checkout from 3.0.0 to 4.0.0"
-	if isEligible(dependabotMajorPR, defaultAllowedBots) {
+	if isEligible(dependabotMajorPR, defaultAllowedBots, "") {
 		t.Errorf("Dependabot major bump should not be eligible")
 	}
 
@@ -293,7 +293,7 @@ func TestIsEligible(t *testing.T) {
 	dependabotMinorPR := basePR
 	dependabotMinorPR.Author.Login = "dependabot[bot]"
 	dependabotMinorPR.Title = "Bump actions/checkout from 4.0.0 to 4.1.0"
-	if !isEligible(dependabotMinorPR, defaultAllowedBots) {
+	if !isEligible(dependabotMinorPR, defaultAllowedBots, "") {
 		t.Errorf("Dependabot minor bump should be eligible")
 	}
 
@@ -301,7 +301,7 @@ func TestIsEligible(t *testing.T) {
 	dependabotSubdirMinorPR := basePR
 	dependabotSubdirMinorPR.Author.Login = "dependabot[bot]"
 	dependabotSubdirMinorPR.Title = "Bump actions/checkout from 4.0.0 to 4.1.0 in /.github/workflows"
-	if !isEligible(dependabotSubdirMinorPR, defaultAllowedBots) {
+	if !isEligible(dependabotSubdirMinorPR, defaultAllowedBots, "") {
 		t.Errorf("Dependabot subdirectory minor bump should be eligible")
 	}
 
@@ -309,7 +309,7 @@ func TestIsEligible(t *testing.T) {
 	dependabotSubdirMajorPR := basePR
 	dependabotSubdirMajorPR.Author.Login = "dependabot[bot]"
 	dependabotSubdirMajorPR.Title = "Bump actions/checkout from 3.0.0 to 4.0.0 in /.github/workflows"
-	if isEligible(dependabotSubdirMajorPR, defaultAllowedBots) {
+	if isEligible(dependabotSubdirMajorPR, defaultAllowedBots, "") {
 		t.Errorf("Dependabot subdirectory major bump should not be eligible")
 	}
 
@@ -317,7 +317,7 @@ func TestIsEligible(t *testing.T) {
 	dependabotGroupPR := basePR
 	dependabotGroupPR.Author.Login = "dependabot[bot]"
 	dependabotGroupPR.Title = "Bump the rust group with 2 updates"
-	if isEligible(dependabotGroupPR, defaultAllowedBots) {
+	if isEligible(dependabotGroupPR, defaultAllowedBots, "") {
 		t.Errorf("Dependabot group update should not be eligible")
 	}
 
@@ -325,7 +325,7 @@ func TestIsEligible(t *testing.T) {
 	dependabotCachixPR := basePR
 	dependabotCachixPR.Author.Login = "dependabot[bot]"
 	dependabotCachixPR.Title = "Bump cachix/cachix-action from 14 to 15"
-	if isEligible(dependabotCachixPR, defaultAllowedBots) {
+	if isEligible(dependabotCachixPR, defaultAllowedBots, "") {
 		t.Errorf("Dependabot cachix major bump should not be eligible")
 	}
 
@@ -333,7 +333,7 @@ func TestIsEligible(t *testing.T) {
 	renovateMajorPR := basePR
 	renovateMajorPR.Author.Login = "renovate[bot]"
 	renovateMajorPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [actions/checkout](https://example.com) | major | `3.0.0` -> `4.0.0` |\n"
-	if isEligible(renovateMajorPR, defaultAllowedBots) {
+	if isEligible(renovateMajorPR, defaultAllowedBots, "") {
 		t.Errorf("Renovate major bump should not be eligible")
 	}
 
@@ -341,7 +341,7 @@ func TestIsEligible(t *testing.T) {
 	renovate0xPR := basePR
 	renovate0xPR.Author.Login = "renovate[bot]"
 	renovate0xPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [dprint/dprint-plugin-markdown](https://example.com) | minor | `0.24.0` → `0.26.0` |\n"
-	if !isEligible(renovate0xPR, defaultAllowedBots) {
+	if !isEligible(renovate0xPR, defaultAllowedBots, "") {
 		t.Errorf("Renovate 0.x bump should be eligible")
 	}
 
@@ -349,8 +349,68 @@ func TestIsEligible(t *testing.T) {
 	renovateInvalidBodyPR := basePR
 	renovateInvalidBodyPR.Author.Login = "renovate[bot]"
 	renovateInvalidBodyPR.Body = "Unrecognized body without table"
-	if isEligible(renovateInvalidBodyPR, defaultAllowedBots) {
+	if isEligible(renovateInvalidBodyPR, defaultAllowedBots, "") {
 		t.Errorf("Renovate unrecognized body should not be eligible")
+	}
+
+	// Copilot agent PR without review approval (ineligible)
+	copilotUnapprovedPR := basePR
+	copilotUnapprovedPR.Author.Login = "app/copilot-swe-agent"
+	copilotUnapprovedPR.Title = "Update dprint plugins"
+	if isEligible(copilotUnapprovedPR, defaultAllowedBots, "kachick") {
+		t.Errorf("Copilot PR without review approval should not be eligible")
+	}
+
+	// Copilot agent PR with non-maintainer approval (ineligible)
+	copilotExternalApprovedPR := copilotUnapprovedPR
+	copilotExternalApprovedPR.LatestReviews = []Review{
+		{
+			Author:            Author{Login: "external-user"},
+			AuthorAssociation: "NONE",
+			State:             "APPROVED",
+		},
+	}
+	if isEligible(copilotExternalApprovedPR, defaultAllowedBots, "kachick") {
+		t.Errorf("Copilot PR with external approval should not be eligible")
+	}
+
+	// Copilot agent PR with changes requested (ineligible)
+	copilotChangesRequestedPR := copilotUnapprovedPR
+	copilotChangesRequestedPR.LatestReviews = []Review{
+		{
+			Author:            Author{Login: "kachick"},
+			AuthorAssociation: "OWNER",
+			State:             "CHANGES_REQUESTED",
+		},
+	}
+	if isEligible(copilotChangesRequestedPR, defaultAllowedBots, "kachick") {
+		t.Errorf("Copilot PR with changes requested should not be eligible")
+	}
+
+	// Copilot agent PR with OWNER approval (eligible)
+	copilotOwnerApprovedPR := copilotUnapprovedPR
+	copilotOwnerApprovedPR.LatestReviews = []Review{
+		{
+			Author:            Author{Login: "owner-user"},
+			AuthorAssociation: "OWNER",
+			State:             "APPROVED",
+		},
+	}
+	if !isEligible(copilotOwnerApprovedPR, defaultAllowedBots, "") {
+		t.Errorf("Copilot PR with OWNER approval should be eligible")
+	}
+
+	// Copilot agent PR with configured reviewer approval (eligible)
+	copilotReviewerApprovedPR := copilotUnapprovedPR
+	copilotReviewerApprovedPR.LatestReviews = []Review{
+		{
+			Author:            Author{Login: "kachick"},
+			AuthorAssociation: "CONTRIBUTOR",
+			State:             "APPROVED",
+		},
+	}
+	if !isEligible(copilotReviewerApprovedPR, defaultAllowedBots, "kachick") {
+		t.Errorf("Copilot PR with reviewer approval should be eligible")
 	}
 }
 
@@ -1156,7 +1216,7 @@ func TestCheckEligibility(t *testing.T) {
 	}
 
 	meta := workflowmeta.Metadata{}
-	res := checkEligibility(basePR, defaultAllowedBots, meta)
+	res := checkEligibility(basePR, defaultAllowedBots, "", meta)
 	if !res.Eligible || res.Reason != "eligible for merge" {
 		t.Fatalf("expected eligible for merge, got eligible=%v, reason=%q", res.Eligible, res.Reason)
 	}
@@ -1164,14 +1224,14 @@ func TestCheckEligibility(t *testing.T) {
 	dependabot0xPR := basePR
 	dependabot0xPR.Author.Login = "dependabot[bot]"
 	dependabot0xPR.Title = "Bump golang.org/x/sys from 0.48.0 to 0.49.0"
-	if res := checkEligibility(dependabot0xPR, defaultAllowedBots, meta); !res.Eligible {
+	if res := checkEligibility(dependabot0xPR, defaultAllowedBots, "", meta); !res.Eligible {
 		t.Fatalf("expected dependabot 0.x bump to be eligible, got reason=%q", res.Reason)
 	}
 
 	renovate0xPR := basePR
 	renovate0xPR.Author.Login = "renovate[bot]"
 	renovate0xPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [dprint/dprint-plugin-markdown](https://example.com) | minor | `0.24.0` → `0.26.0` |\n"
-	if res := checkEligibility(renovate0xPR, defaultAllowedBots, meta); !res.Eligible {
+	if res := checkEligibility(renovate0xPR, defaultAllowedBots, "", meta); !res.Eligible {
 		t.Fatalf("expected renovate 0.x bump to be eligible, got reason=%q", res.Reason)
 	}
 
@@ -1187,6 +1247,29 @@ func TestCheckEligibility(t *testing.T) {
 				pr.Author.Login = "attacker[bot]"
 			},
 			wantReason:  `author "attacker[bot]" is not in allowed bots`,
+			wantBlocked: false,
+		},
+		{
+			name: "copilot agent without review approval",
+			modify: func(pr *PullRequest) {
+				pr.Author.Login = "app/copilot-swe-agent"
+			},
+			wantReason:  "requires review approval from maintainer",
+			wantBlocked: false,
+		},
+		{
+			name: "copilot agent with changes requested",
+			modify: func(pr *PullRequest) {
+				pr.Author.Login = "app/copilot-swe-agent"
+				pr.LatestReviews = []Review{
+					{
+						Author:            Author{Login: "kachick"},
+						AuthorAssociation: "OWNER",
+						State:             "CHANGES_REQUESTED",
+					},
+				}
+			},
+			wantReason:  "changes requested on pull request",
 			wantBlocked: false,
 		},
 		{
@@ -1290,7 +1373,7 @@ func TestCheckEligibility(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pr := basePR
 			tc.modify(&pr)
-			res := checkEligibility(pr, defaultAllowedBots, meta)
+			res := checkEligibility(pr, defaultAllowedBots, "kachick", meta)
 			if res.Eligible {
 				t.Fatalf("expected PR to be ineligible")
 			}

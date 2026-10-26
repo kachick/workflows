@@ -50,6 +50,10 @@ Preserve the following invariants when modifying or extending `automerge`:
   - **Trap: Do not require approvals (`required_approving_review_count >= 1`) in personal repositories**:
     - Because bot pull requests never receive Copilot reviews, requiring approvals will permanently block unattended merges for Dependabot and Renovate.
     - Keep `required_approving_review_count = 0` in personal repository rulesets to preserve unattended bot automerge.
+  - **Review approval requirement for Copilot agent PRs (`copilot-swe-agent`)**:
+    - Unlike version bump bots (Dependabot, Renovate), Copilot coding agent PRs contain arbitrary code changes.
+    - To prevent untrusted changes or prompt injections from auto-merging, `automerge` requires an explicit `APPROVED` review from a maintainer (the configured reviewer or repository `OWNER`/`COLLABORATOR`/`MEMBER`) before merging Copilot agent PRs.
+    - When approval is missing or changes are requested, `automerge` skips the PR without noisy labels until a maintainer approves it.
 - **Why OSV-Scanner runs before LLM veto**:
   - `osv-scanner` deterministically compares base and PR trees to catch newly introduced CVEs in supported lockfiles (`go.mod`, `Cargo.lock`, `package-lock.json`, etc.). Note that `flake.lock` is not directly supported by `osv-scanner` and is inspected by `nix-diff-closures` instead.
   - Running this check first rejects known vulnerabilities immediately without spending LLM API tokens.

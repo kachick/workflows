@@ -29,6 +29,8 @@ var defaultAllowedBots = []string{
 	"renovate[bot]",
 	"app/samuebot",
 	"samuebot[bot]",
+	"app/copilot-swe-agent",
+	"copilot-swe-agent[bot]",
 }
 
 var (
@@ -70,6 +72,7 @@ const (
 	SourceDraft         PRSource = "Draft"
 	SourceMergeable     PRSource = "Mergeable"
 	SourceCI            PRSource = "CI"
+	SourceReview        PRSource = "Review approval"
 	SourceVersionBump   PRSource = "Version bump policy"
 	SourceDiff          PRSource = "Diff"
 	SourceVulnerability PRSource = "Vulnerability scan"
@@ -120,6 +123,7 @@ type PullRequest struct {
 	StatusCheckRollup []StatusCheckItem `json:"statusCheckRollup"`
 	Labels            []Label           `json:"labels"`
 	BaseRefName       string            `json:"baseRefName"`
+	LatestReviews     []Review          `json:"latestReviews"`
 }
 
 type Label struct {
@@ -128,6 +132,12 @@ type Label struct {
 
 type Author struct {
 	Login string `json:"login"`
+}
+
+type Review struct {
+	Author            Author `json:"author"`
+	AuthorAssociation string `json:"authorAssociation"`
+	State             string `json:"state"`
 }
 
 type StatusCheckItem struct {
@@ -162,7 +172,7 @@ type DefaultCommandRunner struct{}
 func (r *DefaultCommandRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"--state", "open",
-		"--json", "number,title,body,author,isDraft,mergeable,statusCheckRollup,labels,baseRefName",
+		"--json", "number,title,body,author,isDraft,mergeable,statusCheckRollup,labels,baseRefName,latestReviews",
 	)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -182,7 +192,7 @@ func (r *DefaultCommandRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest,
 
 func (r *DefaultCommandRunner) FetchPR(ctx context.Context, number int) (*PullRequest, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "view", strconv.Itoa(number),
-		"--json", "number,title,body,author,isDraft,mergeable,statusCheckRollup,labels,baseRefName",
+		"--json", "number,title,body,author,isDraft,mergeable,statusCheckRollup,labels,baseRefName,latestReviews",
 	)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -576,6 +586,44 @@ func isAllowedBot(login string, allowedBots []string) bool {
 	return false
 }
 
+func isCopilotAgent(login string) bool {
+	return strings.Contains(login, "copilot")
+}
+
+// Why check reviewer or OWNER/COLLABORATOR/MEMBER:
+// Copilot agent PRs contain arbitrary code changes unlike version bump bots.
+// Requiring explicit maintainer approval ensures humans inspect the diff before merge,
+// preventing prompt injection or untrusted edits from auto-merging.
+func checkReviewApproval(pr PullRequest, reviewer string) (approved bool, reason string) {
+	hasChangesRequested := false
+	hasApproved := false
+	approver := ""
+
+	for _, rev := range pr.LatestReviews {
+		if rev.State == "CHANGES_REQUESTED" {
+			hasChangesRequested = true
+		}
+		isMaintainer := (reviewer != "" && rev.Author.Login == reviewer) ||
+			rev.AuthorAssociation == "OWNER" ||
+			rev.AuthorAssociation == "COLLABORATOR" ||
+			rev.AuthorAssociation == "MEMBER"
+		if isMaintainer && rev.State == "APPROVED" {
+			hasApproved = true
+			if approver == "" {
+				approver = rev.Author.Login
+			}
+		}
+	}
+
+	if hasChangesRequested {
+		return false, "changes requested on pull request"
+	}
+	if !hasApproved {
+		return false, "requires review approval from maintainer"
+	}
+	return true, fmt.Sprintf("approved by @%s", approver)
+}
+
 func hasLabel(pr PullRequest, name string) bool {
 	for _, label := range pr.Labels {
 		if label.Name == name {
@@ -585,7 +633,7 @@ func hasLabel(pr PullRequest, name string) bool {
 	return false
 }
 
-func checkEligibility(pr PullRequest, allowedBots []string, meta workflowmeta.Metadata) EligibilityResult {
+func checkEligibility(pr PullRequest, allowedBots []string, reviewer string, meta workflowmeta.Metadata) EligibilityResult {
 	var steps []EvaluationStep
 
 	// Step 1: Author check
@@ -747,7 +795,31 @@ func checkEligibility(pr PullRequest, allowedBots []string, meta workflowmeta.Me
 		Details: fmt.Sprintf("%d/%d checks passed", len(pr.StatusCheckRollup), len(pr.StatusCheckRollup)),
 	})
 
-	// Step 6: Version bump policy
+	// Step 6: Review approval check for agent bots
+	if isCopilotAgent(pr.Author.Login) {
+		approved, reason := checkReviewApproval(pr, reviewer)
+		if !approved {
+			steps = append(steps, EvaluationStep{
+				Name:    "Maintainer review approval",
+				Status:  StepFailed,
+				Details: reason,
+			})
+			return EligibilityResult{
+				Eligible: false,
+				Blocked:  false, // Wait for maintainer review without noisy blocks or review requests
+				Source:   SourceReview,
+				Reason:   reason,
+				Steps:    steps,
+			}
+		}
+		steps = append(steps, EvaluationStep{
+			Name:    "Maintainer review approval",
+			Status:  StepPassed,
+			Details: reason,
+		})
+	}
+
+	// Step 7: Version bump policy
 	lastBumpReason := "non-breaking update"
 	if strings.Contains(pr.Author.Login, "dependabot") {
 		if disallowed, reason := checkDependabotBump(pr.Title, pr.Body); disallowed {
@@ -803,14 +875,14 @@ func checkEligibility(pr PullRequest, allowedBots []string, meta workflowmeta.Me
 	}
 }
 
-func isEligible(pr PullRequest, allowedBots []string) bool {
-	return checkEligibility(pr, allowedBots, workflowmeta.Metadata{}).Eligible
+func isEligible(pr PullRequest, allowedBots []string, reviewer string) bool {
+	return checkEligibility(pr, allowedBots, reviewer, workflowmeta.Metadata{}).Eligible
 }
 
-func filterEligible(prs []PullRequest, allowedBots []string) []PullRequest {
+func filterEligible(prs []PullRequest, allowedBots []string, reviewer string) []PullRequest {
 	var eligible []PullRequest
 	for _, pr := range prs {
-		if isEligible(pr, allowedBots) {
+		if isEligible(pr, allowedBots, reviewer) {
 			eligible = append(eligible, pr)
 		}
 	}
@@ -844,7 +916,7 @@ func shouldRetryMergeable(pr PullRequest, allowedBots []string) bool {
 // Why retry on UNKNOWN:
 // GitHub computes PR mergeability asynchronously in background workers after PR creation
 // or pushes to the base branch. Immediate skipping would delay merging until the next schedule.
-func retryMergeable(ctx context.Context, runner CommandRunner, pr PullRequest, allowedBots []string, meta workflowmeta.Metadata) (PullRequest, EligibilityResult) {
+func retryMergeable(ctx context.Context, runner CommandRunner, pr PullRequest, allowedBots []string, reviewer string, meta workflowmeta.Metadata) (PullRequest, EligibilityResult) {
 	currentPR := pr
 	var res EligibilityResult
 	for attempt := 1; attempt <= mergeableRetryMaxAttempts; attempt++ {
@@ -853,7 +925,7 @@ func retryMergeable(ctx context.Context, runner CommandRunner, pr PullRequest, a
 
 		select {
 		case <-ctx.Done():
-			return currentPR, checkEligibility(currentPR, allowedBots, meta)
+			return currentPR, checkEligibility(currentPR, allowedBots, reviewer, meta)
 		case <-time.After(mergeableRetryInterval):
 		}
 
@@ -863,7 +935,7 @@ func retryMergeable(ctx context.Context, runner CommandRunner, pr PullRequest, a
 			break
 		}
 		currentPR = *updated
-		res = checkEligibility(currentPR, allowedBots, meta)
+		res = checkEligibility(currentPR, allowedBots, reviewer, meta)
 		if currentPR.Mergeable != "UNKNOWN" {
 			break
 		}
@@ -1690,9 +1762,9 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 		steps []EvaluationStep
 	}
 	for _, pr := range prs {
-		res := checkEligibility(pr, cfg.AllowedBots, meta)
+		res := checkEligibility(pr, cfg.AllowedBots, cfg.Reviewer, meta)
 		if !res.Eligible && pr.Mergeable == "UNKNOWN" && shouldRetryMergeable(pr, cfg.AllowedBots) {
-			pr, res = retryMergeable(ctx, runner, pr, cfg.AllowedBots, meta)
+			pr, res = retryMergeable(ctx, runner, pr, cfg.AllowedBots, cfg.Reviewer, meta)
 		}
 		if res.Eligible {
 			fmt.Printf("PR #%d (%s): eligible\n", pr.Number, pr.Title)
