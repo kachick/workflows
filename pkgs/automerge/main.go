@@ -38,7 +38,7 @@ var (
 	dependabotBodyUpdateRegex  = regexp.MustCompile(`(?m)^\s*(?:Updates?|Updated|Bumps?|Bumped)\s+(?:` + "`(?P<pkg1>[^`]+)`" + `|\[(?P<pkg2>[^\]]+)\]\([^)]+\)|(?P<pkg3>[^ \n]+))\s+from\s+(?P<old>[^ \n]+)\s+to\s+(?P<new>[^ \n]+)`)
 	dependabotGroupHeaderRegex = regexp.MustCompile(`(?i)\bwith\s+(\d+)\s+updates?\b`)
 	detailsTagRegex            = regexp.MustCompile(`(?s)<details\b[^>]*>.*?</details>`)
-	renovateTableRowRegex      = regexp.MustCompile(`(?m)^\|\s*(?:\[(?P<pkg>[^\]]+)\]\([^)]+\)|(?P<rawpkg>[^|]+?))\s*\|(?:[^|\n]*\|)*?\s*(?:(?P<update>[a-zA-Z]+)\s*\|\s*)?[^|\n]*?` + "`(?P<old>[^`]+)`" + `\s*(?:→|->)\s*` + "`(?P<new>[^`]+)`")
+	renovateTableRowRegex      = regexp.MustCompile(`(?m)^\|\s*(?:\[(?P<pkg>[^\]]+)\]\([^)]+\)[^|]*|(?P<rawpkg>[^|]+?))\s*\|(?:[^|\n]*\|)*?\s*(?:(?P<update>[a-zA-Z]+)\s*\|\s*)?[^|\n]*?(?:` + "`(?P<old>[^`]*)`" + `)?\s*(?:→|->)\s*` + "`(?P<new>[^`]+)`")
 	hexDigestRegex             = regexp.MustCompile(`^(?:sha256:)?[0-9a-f]{7,64}$`)
 )
 
@@ -358,8 +358,35 @@ func parseConfig(args []string) (*Config, error) {
 	return cfg, nil
 }
 
+// Why trim range and version prefixes in a generic loop:
+// Package managers in Renovate and Dependabot output various version range prefixes
+// (e.g. "^6.28.1" in npm, "~> 1.60.0" in bundler, ">= 2.0" in cargo, "v1.2.3" in go).
+// Stripping these prefixes generically avoids fragile per-ecosystem parsers while
+// preserving SemVer major comparison.
+func trimVersionPrefix(v string) string {
+	cleaned := strings.TrimSpace(v)
+	for {
+		orig := cleaned
+		cleaned = strings.TrimPrefix(cleaned, "^")
+		cleaned = strings.TrimPrefix(cleaned, "~>")
+		cleaned = strings.TrimPrefix(cleaned, "~")
+		cleaned = strings.TrimPrefix(cleaned, ">=")
+		cleaned = strings.TrimPrefix(cleaned, "<=")
+		cleaned = strings.TrimPrefix(cleaned, ">")
+		cleaned = strings.TrimPrefix(cleaned, "<")
+		cleaned = strings.TrimPrefix(cleaned, "=")
+		cleaned = strings.TrimPrefix(cleaned, "v")
+		cleaned = strings.TrimPrefix(cleaned, "@")
+		cleaned = strings.TrimSpace(cleaned)
+		if cleaned == orig {
+			break
+		}
+	}
+	return cleaned
+}
+
 func extractVersionParts(v string) (major string, minor string) {
-	cleaned := strings.TrimPrefix(v, "v")
+	cleaned := trimVersionPrefix(v)
 	parts := strings.Split(cleaned, ".")
 	major = parts[0]
 	if len(parts) > 1 {
@@ -554,7 +581,7 @@ func checkRenovateBump(body string) (disallowed bool, reason string) {
 		oldVer := match[oldIndex]
 		newVer := match[newIndex]
 
-		if update == "digest" || update == "pinDigest" || (update != "major" && isDigestBump(oldVer, newVer)) {
+		if update == "digest" || update == "pinDigest" || (update != "major" && isDigestBump(oldVer, newVer)) || (oldVer == "" && hexDigestRegex.MatchString(newVer)) {
 			lastReason = "allowed digest update"
 			continue
 		}

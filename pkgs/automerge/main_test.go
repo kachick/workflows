@@ -1450,6 +1450,48 @@ func TestCheckRenovateBump(t *testing.T) {
 			wantReason: "allowed digest update",
 		},
 		{
+			name:       "github action pin digest without old version",
+			body:       "This PR contains the following updates:\n\n| Package | Type | Update | Change |\n|---|---|---|---|\n| [actions/checkout](https://redirect.github.com/actions/checkout) | action | pinDigest |  → `3d3c42e` |\n",
+			disallowed: false,
+			wantReason: "allowed digest update",
+		},
+		{
+			name:       "group pin digest without old versions",
+			body:       "This PR contains the following updates:\n\n| Package | Type | Update | Change |\n|---|---|---|---|\n| [actions/checkout](https://redirect.github.com/actions/checkout) | action | pinDigest |  → `3d3c42e` |\n| [actions/download-artifact](https://redirect.github.com/actions/download-artifact) | action | pinDigest |  → `9000827` |\n",
+			disallowed: false,
+			wantReason: "non-breaking update",
+		},
+		{
+			name:       "npm range update with confidence columns and markdown link",
+			body:       "This PR contains the following updates:\n\n| Package | Change | [Age](https://docs.renovatebot.com/merge-confidence/) | [Adoption](https://docs.renovatebot.com/merge-confidence/) | [Passing](https://docs.renovatebot.com/merge-confidence/) | [Confidence](https://docs.renovatebot.com/merge-confidence/) |\n|---|---|---|---|---|---|\n| [zod](https://zod.dev) ([source](https://redirect.github.com/colinhacks/zod)) | [`^4.5.4` → `^4.6.5`](https://renovatebot.com/diffs/npm/zod/4.5.4/4.6.5) | ![age](url) | ![adoption](url) | ![passing](url) | ![confidence](url) |\n",
+			disallowed: false,
+			wantReason: "non-breaking update",
+		},
+		{
+			name:       "npm range update major disallowed",
+			body:       "This PR contains the following updates:\n\n| Package | Change |\n|---|---|---|\n| [zod](https://zod.dev) | [`^3.22.0` → `^4.0.0`](https://renovatebot.com/diffs/npm/zod/3.22.0/4.0.0) |\n",
+			disallowed: true,
+			wantReason: "major update (^3.22.0 -> ^4.0.0)",
+		},
+		{
+			name:       "bundler pessimistic range update",
+			body:       "This PR contains the following updates:\n\n| Package | Type | Update | Change |\n|---|---|---|---|\n| [rubocop](https://rubocop.org) | bundler | minor | `~> 1.60.0` → `~> 1.61.0` |\n",
+			disallowed: false,
+			wantReason: "non-breaking update",
+		},
+		{
+			name:       "bundler pessimistic range major update disallowed",
+			body:       "This PR contains the following updates:\n\n| Package | Type | Update | Change |\n|---|---|---|---|\n| [rubocop](https://rubocop.org) | bundler | major | `~> 1.60.0` → `~> 2.0.0` |\n",
+			disallowed: true,
+			wantReason: "major update (~> 1.60.0 -> ~> 2.0.0)",
+		},
+		{
+			name:       "go require digest update",
+			body:       "This PR contains the following updates:\n\n| Package | Type | Update | Change |\n|---|---|---|---|\n| [golang.org/x/xerrors](https://go.googlesource.com/xerrors) | require | digest | `04be3eb` → `7835f81` |\n",
+			disallowed: false,
+			wantReason: "allowed digest update",
+		},
+		{
 			name:       "unlinked package name",
 			body:       "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| foo | patch | `1.0.0` -> `1.0.1` |\n",
 			disallowed: false,
@@ -1528,7 +1570,7 @@ func TestExtractBaseTreeAndApplyPatch(t *testing.T) {
 		t.Fatalf("git add failed (%v): %s", err, string(out))
 	}
 
-	commitCmd := exec.CommandContext(ctx, "git", "-C", repoDir, "commit", "-m", "Initial commit")
+	commitCmd := exec.CommandContext(ctx, "git", "-C", repoDir, "commit", "--no-gpg-sign", "-m", "Initial commit")
 	commitCmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=Test Runner",
 		"GIT_AUTHOR_EMAIL=test@example.com",
