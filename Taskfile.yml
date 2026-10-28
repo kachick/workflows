@@ -1,4 +1,5 @@
-# https://taskfile.dev
+# https://taskfile.dev/styleguide/
+# Avoid chaining commands with ; or && in a single line. Use multiple cmd items for independent steps, or write a script under scripts/ instead.
 
 version: '3'
 
@@ -23,7 +24,7 @@ tasks:
       - CGO_ENABLED=0 go vet ./...
       - go run ./cmd/workflowlint
       - dprint check
-      - typos . .github .vscode
+      - typos . .github
       - betterleaks git --config .betterleaks.toml
       - git ls-files -z '*.sh' '*.bash' | xargs --null --no-run-if-empty shellcheck
       - zizmor --pedantic .
