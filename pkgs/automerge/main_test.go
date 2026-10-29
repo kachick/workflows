@@ -288,6 +288,40 @@ func TestIsEligible(t *testing.T) {
 		t.Errorf("PR with cancelled checks should not be eligible")
 	}
 
+	// StatusContext checks
+	statusContextSuccessPR := basePR
+	statusContextSuccessPR.StatusCheckRollup = []StatusCheckItem{
+		{TypeName: "StatusContext", State: "SUCCESS"},
+	}
+	if !isEligible(statusContextSuccessPR, defaultAllowedBots, "") {
+		t.Errorf("PR with successful status context should be eligible")
+	}
+
+	statusContextPendingPR := basePR
+	statusContextPendingPR.StatusCheckRollup = []StatusCheckItem{
+		{TypeName: "StatusContext", State: "PENDING"},
+	}
+	if isEligible(statusContextPendingPR, defaultAllowedBots, "") {
+		t.Errorf("PR with pending status context should not be eligible")
+	}
+
+	statusContextFailedPR := basePR
+	statusContextFailedPR.StatusCheckRollup = []StatusCheckItem{
+		{TypeName: "StatusContext", State: "FAILURE"},
+	}
+	if isEligible(statusContextFailedPR, defaultAllowedBots, "") {
+		t.Errorf("PR with failed status context should not be eligible")
+	}
+
+	mixedChecksSuccessPR := basePR
+	mixedChecksSuccessPR.StatusCheckRollup = []StatusCheckItem{
+		{TypeName: "CheckRun", Status: "COMPLETED", Conclusion: "SUCCESS"},
+		{TypeName: "StatusContext", State: "SUCCESS"},
+	}
+	if !isEligible(mixedChecksSuccessPR, defaultAllowedBots, "") {
+		t.Errorf("PR with mixed check run and status context should be eligible")
+	}
+
 	// Dependabot major bump (disallowed)
 	dependabotMajorPR := basePR
 	dependabotMajorPR.Author.Login = "app/dependabot"
@@ -418,6 +452,37 @@ func TestIsEligible(t *testing.T) {
 	}
 	if !isEligible(copilotReviewerApprovedPR, defaultAllowedBots, "kachick") {
 		t.Errorf("Copilot PR with reviewer approval should be eligible")
+	}
+}
+
+func TestStatusCheckRollupUnmarshal(t *testing.T) {
+	rawJSON := `[
+		{
+			"__typename": "CheckRun",
+			"name": "Check",
+			"status": "COMPLETED",
+			"conclusion": "SUCCESS"
+		},
+		{
+			"__typename": "StatusContext",
+			"context": "renovate/stability-days",
+			"state": "SUCCESS"
+		}
+	]`
+
+	var checks []StatusCheckItem
+	if err := json.Unmarshal([]byte(rawJSON), &checks); err != nil {
+		t.Fatalf("unexpected unmarshal error: %v", err)
+	}
+
+	if len(checks) != 2 {
+		t.Fatalf("expected 2 checks, got %d", len(checks))
+	}
+	if checks[0].TypeName != "CheckRun" || checks[0].Status != "COMPLETED" || checks[0].Conclusion != "SUCCESS" {
+		t.Errorf("unexpected check run: %+v", checks[0])
+	}
+	if checks[1].TypeName != "StatusContext" || checks[1].State != "SUCCESS" {
+		t.Errorf("unexpected status context: %+v", checks[1])
 	}
 }
 
@@ -1329,6 +1394,26 @@ func TestCheckEligibility(t *testing.T) {
 				}
 			},
 			wantReason:  `status check concluded with "FAILURE"`,
+			wantBlocked: false,
+		},
+		{
+			name: "pending status context",
+			modify: func(pr *PullRequest) {
+				pr.StatusCheckRollup = []StatusCheckItem{
+					{TypeName: "StatusContext", State: "PENDING"},
+				}
+			},
+			wantReason:  "status context is not completed (state: PENDING)",
+			wantBlocked: false,
+		},
+		{
+			name: "failed status context",
+			modify: func(pr *PullRequest) {
+				pr.StatusCheckRollup = []StatusCheckItem{
+					{TypeName: "StatusContext", State: "FAILURE"},
+				}
+			},
+			wantReason:  `status context state is "FAILURE"`,
 			wantBlocked: false,
 		},
 		{

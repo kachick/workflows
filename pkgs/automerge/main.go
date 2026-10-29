@@ -140,9 +140,16 @@ type Review struct {
 	State             string `json:"state"`
 }
 
+// Why support both CheckRun and StatusContext:
+// GitHub GraphQL StatusCheckRollup returns a union of CheckRun and StatusContext (commit statuses).
+// StatusContext items (such as Renovate stability-days) lack status/conclusion and only provide state.
+// Treating StatusContext as regular checks without state caused empty status strings and false rejections,
+// while ignoring them completely would bypass safety checks from commit status providers.
 type StatusCheckItem struct {
+	TypeName   string `json:"__typename"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
+	State      string `json:"state"`
 }
 
 type Config struct {
@@ -785,6 +792,40 @@ func checkEligibility(pr PullRequest, allowedBots []string, reviewer string, met
 	}
 
 	for _, check := range pr.StatusCheckRollup {
+		if check.TypeName == "StatusContext" || (check.TypeName == "" && check.State != "") {
+			if check.State == "PENDING" || check.State == "EXPECTED" {
+				reason := fmt.Sprintf("status context is not completed (state: %s)", check.State)
+				steps = append(steps, EvaluationStep{
+					Name:    "All status checks completed successfully",
+					Status:  StepFailed,
+					Details: reason,
+				})
+				return EligibilityResult{
+					Eligible: false,
+					Blocked:  false,
+					Source:   SourceCI,
+					Reason:   reason,
+					Steps:    steps,
+				}
+			}
+			if check.State != "SUCCESS" {
+				reason := fmt.Sprintf("status context state is %q", check.State)
+				steps = append(steps, EvaluationStep{
+					Name:    "All status checks completed successfully",
+					Status:  StepFailed,
+					Details: reason,
+				})
+				return EligibilityResult{
+					Eligible: false,
+					Blocked:  false,
+					Source:   SourceCI,
+					Reason:   reason,
+					Steps:    steps,
+				}
+			}
+			continue
+		}
+
 		if check.Status != "COMPLETED" {
 			reason := fmt.Sprintf("status check is not completed (status: %s)", check.Status)
 			steps = append(steps, EvaluationStep{
