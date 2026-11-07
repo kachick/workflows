@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -350,22 +351,21 @@ func run() error {
 		}
 		owner, repoName := parts[0], parts[1]
 
-		client := gh.NewClient(token)
-
-		oldIDs, err := client.FindOutdatedComments(ctx, owner, repoName, prNumber, report.Marker)
-		if err != nil {
-			if errors.Is(err, gh.ErrPermissionDenied) {
-				fmt.Fprintln(os.Stderr, "::warning::GitHub token lacks permission to list comments. Continuing without comment minimize.")
-			} else {
-				fmt.Fprintf(os.Stderr, "Warning: failed to search old comments: %v\n", err)
-			}
-		} else {
-			for _, nodeID := range oldIDs {
-				if err := client.MinimizeComment(ctx, nodeID); err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: failed to minimize comment %s: %v\n", nodeID, err)
-				}
-			}
+		// Minimize older diff comments using minimize-pr-comments CLI
+		minimizeCmd := exec.CommandContext(ctx, "minimize-pr-comments",
+			"--owner="+owner,
+			"--repo="+repoName,
+			fmt.Sprintf("--pr=%d", prNumber),
+			"--marker="+report.Marker,
+		)
+		minimizeCmd.Env = os.Environ()
+		minimizeCmd.Stdout = os.Stdout
+		minimizeCmd.Stderr = os.Stderr
+		if err := minimizeCmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to minimize old comments: %v\n", err)
 		}
+
+		client := gh.NewClient(token)
 
 		// Second critical guardrail after leak checking: enforce safe length before API call to prevent 422 errors
 		commentToPost := report.EnsureSafeCommentLength(rep.CommentMarkdown, meta)

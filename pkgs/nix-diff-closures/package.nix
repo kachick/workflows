@@ -3,6 +3,7 @@
   buildGo127Module,
   makeWrapper,
   betterleaks,
+  minimize-pr-comments,
 }:
 
 buildGo127Module (finalAttrs: {
@@ -30,6 +31,7 @@ buildGo127Module (finalAttrs: {
     wrapProgram $out/bin/nix-diff-closures --prefix PATH : ${
       lib.makeBinPath [
         betterleaks
+        minimize-pr-comments
       ]
     }
   '';

@@ -27,12 +27,15 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          minimize-pr-comments = pkgs.callPackage ./pkgs/minimize-pr-comments/package.nix { };
         in
         {
-          nix-diff-closures = pkgs.callPackage ./pkgs/nix-diff-closures/package.nix { };
+          inherit minimize-pr-comments;
+          nix-diff-closures = pkgs.callPackage ./pkgs/nix-diff-closures/package.nix {
+            inherit minimize-pr-comments;
+          };
           bump-flake-lock = pkgs.callPackage ./pkgs/bump-flake-lock/package.nix { };
           automerge = pkgs.callPackage ./pkgs/automerge/package.nix { };
-          minimize-pr-comments = pkgs.callPackage ./pkgs/minimize-pr-comments/package.nix { };
         }
       );
 
