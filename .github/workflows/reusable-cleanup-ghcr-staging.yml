@@ -1,0 +1,119 @@
+name: '[Reusable] Cleanup GHCR staging package versions'
+
+on:
+  workflow_call:
+    inputs:
+      package-name:
+        description: 'Package name under repository owner (e.g. home)'
+        required: true
+        type: string
+      pr-number:
+        description: 'Target PR number'
+        required: true
+        type: number
+      body-includes:
+        description: 'Optional substring to minimize outdated deploy comments'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  minimize-old-comments:
+    name: 💬 Minimize
+    if: (github.repository_owner == 'kachick') && (inputs.body-includes != '')
+    permissions:
+      pull-requests: write # Required for minimizing outdated PR comments
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Minimize old comments
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          BODY_INCLUDES: ${{ inputs.body-includes }}
+        run: |
+          gh api -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/{owner}/{repo}/issues/${PR_NUMBER}/comments" --paginate | \
+              jq --arg pattern "$BODY_INCLUDES" '.[] |
+                select(.user.login == "github-actions[bot]" and (.body | contains($pattern))) |
+                .node_id' | \
+                  xargs --no-run-if-empty --replace='{node_id}' \
+                    gh api graphql --raw-field subjectId="{node_id}" \
+                      --raw-field query='mutation($subjectId:ID!) {
+                        minimizeComment(input: { subjectId: $subjectId, classifier: OUTDATED }) {
+                          clientMutationId
+                          minimizedComment {
+                            isMinimized
+                            minimizedReason
+                            viewerCanMinimize
+                          }
+                        }
+                      }'
+
+  ghcr:
+    name: 🗑️ GHCR
+    if: github.repository_owner == 'kachick'
+    permissions:
+      contents: read # Required for actions/checkout
+      pull-requests: write # Required for posting comments to the PR
+      packages: write # Required for deleting staging package versions
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - name: Inspect the PR published package
+        id: inspect-package
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          PACKAGE_NAME: ${{ inputs.package-name }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --paginate \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/users/${REPOSITORY_OWNER}/packages/container/${PACKAGE_NAME}/versions" \
+            --jq ".[] | select(.metadata.container.tags[] | match(\"^pr-${PR_NUMBER}-\")).id" | \
+              ruby -e 'puts STDIN.each_line.map(&:chomp).join(",")' | \
+              xargs --no-run-if-empty --replace='{joined_ids}' echo -n 'package-version-ids={joined_ids}' | tee -a "$GITHUB_OUTPUT"
+      - name: Delete staging package versions
+        if: ${{ steps.inspect-package.outputs.package-version-ids }}
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          PACKAGE_NAME: ${{ inputs.package-name }}
+          VERSION_IDS: ${{ steps.inspect-package.outputs.package-version-ids }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: | #shell
+          # Call REST API directly to avoid depending on inactive actions/delete-package-versions
+          echo "$VERSION_IDS" | tr ',' '\n' | xargs --no-run-if-empty --replace='{id}' \
+            gh api --method DELETE \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/users/${REPOSITORY_OWNER}/packages/container/${PACKAGE_NAME}/versions/{id}"
+      - name: Prepare git to run gh commands
+        if: ${{ steps.inspect-package.outputs.package-version-ids }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Post comments to the PR
+        if: ${{ steps.inspect-package.outputs.package-version-ids }}
+        env:
+          PR_NUMBER: ${{ inputs.pr-number }}
+          VERSION_IDS: ${{ steps.inspect-package.outputs.package-version-ids }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          (
+          cat <<EOF
+          🤖 removed 🗑️ staging ⬢ from ghcr.io
+
+          \`\`\`plaintext
+          ${VERSION_IDS}
+          \`\`\`
+          EOF
+          ) | gh pr comment "${PR_NUMBER}" --body-file -
