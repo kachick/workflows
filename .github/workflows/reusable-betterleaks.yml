@@ -1,3 +1,5 @@
+# Standalone reusable workflow to run betterleaks secret scanning.
+# See pkgs/betterleaks/README.md for architectural decisions and trade-offs.
 name: '[Reusable] Scan Secrets with betterleaks'
 
 on:

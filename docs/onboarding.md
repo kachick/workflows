@@ -9,7 +9,7 @@ Guide for onboarding and installing workflows in caller repositories.
 | [nix-diff-closures](../pkgs/nix-diff-closures/README.md)                       | Post Nix package closure differences on pull requests when `flake.lock` changes |
 | [bump-flake-lock](../pkgs/bump-flake-lock/README.md)                           | Update `flake.lock`, run optional post-update command, and create pull request  |
 | [automerge](../pkgs/automerge/README.md)                                       | Merge eligible bot pull requests via polling                                    |
-| [betterleaks](../.github/workflows/reusable-betterleaks.yml)                   | Scan secrets using upstream binary (temporary non-Nix workflow)                 |
+| [betterleaks](../pkgs/betterleaks/README.md)                                   | Scan secrets using upstream binary (temporary non-Nix workflow)                 |
 | [cleanup-ghcr](../.github/workflows/reusable-cleanup-ghcr.yml)                 | Keep the newest N versions of a GHCR container image and delete older ones      |
 | [cleanup-ghcr-staging](../.github/workflows/reusable-cleanup-ghcr-staging.yml) | Delete temporary PR staging versions from GHCR and report result on PR comment  |
 | [minimize-pr-comments](../pkgs/minimize-pr-comments/README.md)                 | Minimize outdated bot comments matching pattern on a pull request               |
