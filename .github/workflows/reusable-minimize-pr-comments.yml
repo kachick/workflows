@@ -24,32 +24,34 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      # Need checkout before using gh and repo placeholders
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Minimize old comments
+
+      - uses: NixOS/nix-installer-action@62c1943b776c509394b550f3f983adc14e9212d6 # v1.0.0
+        with:
+          # access-tokens: Prevent GitHub API rate limiting during `nix run github:`
+          extra-conf: |
+            access-tokens = github.com=${{ github.token }}
+            extra-substituters = https://kachick.cachix.org
+            extra-trusted-public-keys = kachick.cachix.org-1:7giZGKW03gPFkbde09JNpDKCbDGGwBuU/Z11W/jUtEQ=
+
+      - name: Minimize matching PR comments
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr-number }}
           BODY_INCLUDES: ${{ inputs.body-includes }}
-        # Applied reason will be different caused on GitHub bug, See https://github.com/orgs/community/discussions/19865
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
-          gh api -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "repos/{owner}/{repo}/issues/${PR_NUMBER}/comments" --paginate | \
-              jq --arg pattern "$BODY_INCLUDES" '.[] |
-                select(.user.login == "github-actions[bot]" and (.body | contains($pattern))) |
-                .node_id' | \
-                  xargs --no-run-if-empty --replace='{node_id}' \
-                    gh api graphql --raw-field subjectId="{node_id}" \
-                      --raw-field query='mutation($subjectId:ID!) {
-                        minimizeComment(input: { subjectId: $subjectId, classifier: OUTDATED }) {
-                          clientMutationId
-                          minimizedComment {
-                            isMinimized
-                            minimizedReason
-                            viewerCanMinimize
-                          }
-                        }
-                      }'
+          set -euo pipefail
+
+          if [ -n "${WORKFLOW_REPOSITORY}" ] && [ -n "${WORKFLOW_SHA}" ]; then
+            FLAKE_REF="github:${WORKFLOW_REPOSITORY}/${WORKFLOW_SHA}"
+          else
+            FLAKE_REF="."
+          fi
+
+          nix run "${FLAKE_REF}#minimize-pr-comments" -- \
+            --pr="${PR_NUMBER}" \
+            --marker="${BODY_INCLUDES}"

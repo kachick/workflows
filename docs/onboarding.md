@@ -12,7 +12,7 @@ Guide for onboarding and installing workflows in caller repositories.
 | [betterleaks](../.github/workflows/reusable-betterleaks.yml)                   | Scan secrets using upstream binary (temporary non-Nix workflow)                 |
 | [cleanup-ghcr](../.github/workflows/reusable-cleanup-ghcr.yml)                 | Keep the newest N versions of a GHCR container image and delete older ones      |
 | [cleanup-ghcr-staging](../.github/workflows/reusable-cleanup-ghcr-staging.yml) | Delete temporary PR staging versions from GHCR and report result on PR comment  |
-| [minimize-pr-comments](../.github/workflows/reusable-minimize-pr-comments.yml) | Minimize outdated bot comments matching pattern on a pull request               |
+| [minimize-pr-comments](../pkgs/minimize-pr-comments/README.md)                 | Minimize outdated bot comments matching pattern on a pull request               |
 
 ## Assumptions
 

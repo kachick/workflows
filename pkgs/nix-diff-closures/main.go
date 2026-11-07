@@ -10,10 +10,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kachick/workflows/internal/gh"
 	"github.com/kachick/workflows/internal/leakcheck"
 	"github.com/kachick/workflows/internal/workflowmeta"
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/diff"
-	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/gh"
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/osv"
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/report"
 )

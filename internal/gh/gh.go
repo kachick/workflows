@@ -149,6 +149,25 @@ func (c *Client) MinimizeComment(ctx context.Context, nodeID string) error {
 	return nil
 }
 
+// MinimizeOutdatedComments finds comments matching marker and minimizes them.
+// Returns the count of minimized comments.
+func (c *Client) MinimizeOutdatedComments(ctx context.Context, owner, repo string, pr int, marker string) (int, error) {
+	nodeIDs, err := c.FindOutdatedComments(ctx, owner, repo, pr, marker)
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, nodeID := range nodeIDs {
+		if err := c.MinimizeComment(ctx, nodeID); err != nil {
+			return count, fmt.Errorf("minimize comment %s: %w", nodeID, err)
+		}
+		count++
+	}
+
+	return count, nil
+}
+
 // PostComment posts a new comment on the pull request.
 func (c *Client) PostComment(ctx context.Context, owner, repo string, pr int, body string) error {
 	url := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments", c.APIBaseURL, owner, repo, pr)
