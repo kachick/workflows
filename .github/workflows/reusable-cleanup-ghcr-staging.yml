@@ -25,6 +25,7 @@ jobs:
     name: 💬 Minimize
     if: (github.repository_owner == 'kachick') && (inputs.body-includes != '')
     permissions:
+      contents: read # Required for actions/checkout
       pull-requests: write # Required for minimizing outdated PR comments
     runs-on: ubuntu-26.04
     timeout-minutes: 15
