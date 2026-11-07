@@ -1,7 +1,7 @@
 {
   lib,
   buildGo127Module,
-  makeWrapper,
+  makeBinaryWrapper,
   betterleaks,
   minimize-pr-comments,
 }:
@@ -25,7 +25,7 @@ buildGo127Module (finalAttrs: {
 
   subPackages = [ "pkgs/nix-diff-closures" ];
 
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [ makeBinaryWrapper ];
 
   postInstall = ''
     wrapProgram $out/bin/nix-diff-closures --prefix PATH : ${
