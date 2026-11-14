@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kachick/workflows/cmd/cachixpin/internal/cachixpin"
+	"github.com/kachick/workflows/pkgs/cachixpin/internal/cachixpin"
 )
 
 type mockRunner struct {

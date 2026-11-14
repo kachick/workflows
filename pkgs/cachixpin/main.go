@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kachick/workflows/cmd/cachixpin/internal/cachixpin"
+	"github.com/kachick/workflows/pkgs/cachixpin/internal/cachixpin"
 )
 
 func main() {
