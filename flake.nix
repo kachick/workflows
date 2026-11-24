@@ -37,6 +37,7 @@
           bump-flake-lock = pkgs.callPackage ./pkgs/bump-flake-lock/package.nix { };
           automerge = pkgs.callPackage ./pkgs/automerge/package.nix { };
           cachixpin = pkgs.callPackage ./pkgs/cachixpin/package.nix { };
+          recommend-schedule = pkgs.callPackage ./pkgs/recommend-schedule/package.nix { };
         }
       );
 

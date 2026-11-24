@@ -48,22 +48,15 @@ If all repositories run at the exact same minute, shared GitHub App limits and d
 - **`automerge` (Polling every 6 hours)**:
   - **Distribute minute (0-59)**: Spreads out polling runs so Gemini API and GitHub App limits are not hit in the same minute.
 
-### Deterministic Schedule Helper (Ruby)
+### Deterministic Schedule Helper
 
 ```console
-# For bump-flake-lock: 1st of month with distributed hour and minute
-ruby -e '
-  require "zlib"
-  crc = Zlib.crc32("kachick/workflows")
-  puts "#{crc % 60} #{(crc / 60) % 6} 1 * *"
-'
+# Output YAML with recommended schedules for both workflows
+nix run github:kachick/workflows#recommend-schedule -- kachick/workflows
 
-# For automerge: every 6 hours with distributed minute
-ruby -e '
-  require "zlib"
-  crc = Zlib.crc32("kachick/workflows")
-  puts "#{crc % 60} */6 * * *"
-'
+# Output a raw cron expression for a single workflow
+nix run github:kachick/workflows#recommend-schedule -- --workflow bump-flake-lock kachick/workflows
+nix run github:kachick/workflows#recommend-schedule -- --workflow automerge kachick/workflows
 ```
 
 ## Repository Layout
