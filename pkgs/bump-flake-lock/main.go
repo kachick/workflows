@@ -24,18 +24,39 @@ type Config struct {
 	GitUserEmail    string
 }
 
-func buildPRBody(customBody string, meta workflowmeta.Metadata, isCI bool) (string, error) {
+func buildPRBody(customBody string, updates []flakeInputUpdate, meta workflowmeta.Metadata, isCI bool) (string, error) {
 	if !meta.IsComplete() && isCI {
 		return "", fmt.Errorf("missing required workflow metadata in CI environment: %+v", meta)
 	}
-	header := meta.ProvenanceText("This PR was generated automatically")
+	parts := []string{meta.ProvenanceText("This PR was generated automatically")}
 
 	cleanCustom := strings.TrimSpace(customBody)
-	if cleanCustom == "" || cleanCustom == "This PR was generated automatically." {
-		return header, nil
+	if cleanCustom != "" && cleanCustom != "This PR was generated automatically." {
+		parts = append(parts, cleanCustom)
 	}
 
-	return header + "\n\n" + cleanCustom, nil
+	if diffSection := formatFlakeLockUpdates(updates); diffSection != "" {
+		parts = append(parts, diffSection)
+	}
+
+	return strings.Join(parts, "\n\n"), nil
+}
+
+func collectFlakeLockUpdates(ctx context.Context, env []string, defaultBranch string) []flakeInputUpdate {
+	oldLock, err := runCmdOutput(ctx, env, "git", "show", fmt.Sprintf("origin/%s:flake.lock", defaultBranch))
+	if err != nil {
+		return nil
+	}
+	newLock, err := runCmdOutput(ctx, env, "git", "show", "HEAD:flake.lock")
+	if err != nil {
+		return nil
+	}
+	updates, err := diffFlakeLocks([]byte(oldLock), []byte(newLock))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to diff flake.lock for PR description: %v\n", err)
+		return nil
+	}
+	return updates
 }
 
 func main() {
@@ -210,7 +231,12 @@ func execute(ctx context.Context, cfg *Config) error {
 		return fmt.Errorf("invalid commit count %q: %w", countStr, err)
 	}
 
-	body, err := buildPRBody(cfg.PRBody, workflowmeta.Get(), os.Getenv("GITHUB_ACTIONS") == "true")
+	var updates []flakeInputUpdate
+	if count > 0 {
+		updates = collectFlakeLockUpdates(ctx, env, defaultBranch)
+	}
+
+	body, err := buildPRBody(cfg.PRBody, updates, workflowmeta.Get(), os.Getenv("GITHUB_ACTIONS") == "true")
 	if err != nil {
 		return fmt.Errorf("failed to build PR body: %w", err)
 	}
@@ -252,6 +278,14 @@ func execute(ctx context.Context, cfg *Config) error {
 		}
 		if err := runCmd(ctx, env, "gh", createArgs...); err != nil {
 			return fmt.Errorf("failed to create PR: %w", err)
+		}
+	} else {
+		editArgs := []string{
+			"pr", "edit", cfg.BranchName,
+			"--body", body,
+		}
+		if err := runCmd(ctx, env, "gh", editArgs...); err != nil {
+			return fmt.Errorf("failed to update PR description: %w", err)
 		}
 	}
 

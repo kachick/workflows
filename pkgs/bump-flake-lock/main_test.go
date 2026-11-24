@@ -105,7 +105,7 @@ func TestBuildPRBody(t *testing.T) {
 	expectedHeader := "This PR was generated automatically by [actions/runs/12345678](https://github.com/kachick/workflows/actions/runs/12345678) (defined at [kachick/workflows@c4c03dd](https://github.com/kachick/workflows/blob/c4c03dd9c5377b99ca53183897baaf53114b86db/.github/workflows/reusable-bump-flake-lock.yml))."
 
 	t.Run("complete metadata without custom body", func(t *testing.T) {
-		body, err := buildPRBody("", completeMeta, true)
+		body, err := buildPRBody("", nil, completeMeta, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -115,7 +115,7 @@ func TestBuildPRBody(t *testing.T) {
 	})
 
 	t.Run("complete metadata with default body string behaves as empty", func(t *testing.T) {
-		body, err := buildPRBody("This PR was generated automatically.", completeMeta, true)
+		body, err := buildPRBody("This PR was generated automatically.", nil, completeMeta, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -125,7 +125,7 @@ func TestBuildPRBody(t *testing.T) {
 	})
 
 	t.Run("complete metadata with custom body appends note", func(t *testing.T) {
-		body, err := buildPRBody("Sync CI dependencies with nixpkgs", completeMeta, true)
+		body, err := buildPRBody("Sync CI dependencies with nixpkgs", nil, completeMeta, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -135,10 +135,33 @@ func TestBuildPRBody(t *testing.T) {
 		}
 	})
 
+	t.Run("complete metadata with flake.lock updates appends compare section", func(t *testing.T) {
+		updates := []flakeInputUpdate{
+			{
+				Node:   "nixpkgs",
+				Owner:  "NixOS",
+				Repo:   "nixpkgs",
+				OldRev: "6dadaf4375be35033e1c84395adbd53ff5fded96",
+				NewRev: "abcdef1234567890abcdef1234567890abcdef12",
+			},
+		}
+		body, err := buildPRBody("Sync CI dependencies with nixpkgs", updates, completeMeta, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expected := expectedHeader +
+			"\n\nSync CI dependencies with nixpkgs" +
+			"\n\n### Updated `flake.lock` inputs\n\n" +
+			"- `nixpkgs` (`NixOS/nixpkgs`): [`6dadaf4...abcdef1`](https://github.com/NixOS/nixpkgs/compare/6dadaf4375be35033e1c84395adbd53ff5fded96...abcdef1234567890abcdef1234567890abcdef12)"
+		if body != expected {
+			t.Errorf("expected %q, got %q", expected, body)
+		}
+	})
+
 	t.Run("incomplete metadata fails fast in CI environment", func(t *testing.T) {
 		incomplete := completeMeta
 		incomplete.WorkflowSHA = ""
-		_, err := buildPRBody("", incomplete, true)
+		_, err := buildPRBody("", nil, incomplete, true)
 		if err == nil {
 			t.Fatal("expected error when workflow metadata is incomplete in CI, got nil")
 		}
@@ -146,7 +169,7 @@ func TestBuildPRBody(t *testing.T) {
 
 	t.Run("incomplete metadata falls back to default in non-CI environment", func(t *testing.T) {
 		incomplete := workflowmeta.Metadata{}
-		body, err := buildPRBody("", incomplete, false)
+		body, err := buildPRBody("", nil, incomplete, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -154,7 +177,7 @@ func TestBuildPRBody(t *testing.T) {
 			t.Errorf("expected default body, got %q", body)
 		}
 
-		bodyWithCustom, err := buildPRBody("Custom note", incomplete, false)
+		bodyWithCustom, err := buildPRBody("Custom note", nil, incomplete, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
