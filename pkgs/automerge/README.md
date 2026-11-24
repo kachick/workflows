@@ -66,6 +66,11 @@ Preserve the following invariants when modifying or extending `automerge`:
     - [All pull requests requiring review](https://github.com/pulls?q=is%3Apr+is%3Aopen+user%3Akachick+label%3Aautomerge%3Avetoed%2Cautomerge%3Ablocked)
 - **Why LLM inputs are bounded**:
   - Pull request descriptions and diffs are reordered and truncated before calling the LLM API to control token usage and keep model focus on high-signal changes.
+- **Why not [`google-gemini/gemini-api-cli`](https://github.com/google-gemini/gemini-api-cli) for LLM veto**:
+  - `gemini-api-cli` is a shell CLI built for coding agents and scripts to use media generation, file uploads, and managed agents via the Gemini Interactions API.
+  - `automerge` is already a Go binary that makes a single `generateContent` HTTP call with a JSON schema using only the Go standard library (`net/http`, `encoding/json`) and `x-goog-api-key` header auth.
+  - Calling another Go binary as a subprocess adds JSON envelope parsing, weakens `httptest`-based unit tests, and pulls in ~30 third-party Go dependencies (such as TUI and OS keychain libraries) plus Nix `vendorHash` maintenance toil.
+  - As of 2026-11, `gemini-api-cli` is still in beta (v0.5) with possible breaking changes, and structured JSON output still requires building a request JSON body manually (`--body`).
 - **Side benefits of polling**:
   - Because the job only inspects pull requests whose checks have already completed, it finishes quickly without holding runners open (no need for [`kachick/wait-other-jobs`](https://github.com/kachick/wait-other-jobs)) and requires no per-repository branch protection check lists.
 
