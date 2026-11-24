@@ -10,6 +10,7 @@ jobs:
     uses: kachick/workflows/.github/workflows/reusable-betterleaks.yml@main
     with:
       betterleaks-version: '1.9.0' # optional
+      config-path: '.betterleaks.toml' # optional
 ```
 
 ## Design Decisions & Trade-offs
