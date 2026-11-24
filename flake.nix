@@ -27,18 +27,17 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          minimize-pr-comments = pkgs.callPackage ./pkgs/minimize-pr-comments/package.nix { };
+          # Skip doc-only directories under ./pkgs (e.g. betterleaks) without special-casing names.
+          pkgDirs = lib.filterAttrs (
+            name: type: type == "directory" && builtins.pathExists (./pkgs + "/${name}/package.nix")
+          ) (builtins.readDir ./pkgs);
         in
-        {
-          inherit minimize-pr-comments;
-          nix-diff-closures = pkgs.callPackage ./pkgs/nix-diff-closures/package.nix {
-            inherit minimize-pr-comments;
-          };
-          bump-flake-lock = pkgs.callPackage ./pkgs/bump-flake-lock/package.nix { };
-          automerge = pkgs.callPackage ./pkgs/automerge/package.nix { };
-          cachixpin = pkgs.callPackage ./pkgs/cachixpin/package.nix { };
-          recommend-schedule = pkgs.callPackage ./pkgs/recommend-schedule/package.nix { };
-        }
+        lib.fix (
+          self:
+          lib.mapAttrs (
+            name: _: lib.callPackageWith (pkgs // self) (./pkgs + "/${name}/package.nix") { }
+          ) pkgDirs
+        )
       );
 
       devShells = forAllSystems (
