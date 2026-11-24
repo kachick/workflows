@@ -9,7 +9,14 @@ on:
         description: 'betterleaks CLI version (without v prefix)'
         required: false
         type: string
-        default: '1.9.0'
+        # TODO: Pinning a default version in this repo may leave version control in the middle.
+        # Consider removing the default so callers handle versions directly with upstream.
+        default: '1.10.1' # selfup {"extract":"\\d[^']+","replacer":["betterleaks", "version"]}
+      config-path:
+        description: 'Path to betterleaks config file relative to repository root'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -52,6 +59,8 @@ jobs:
           persist-credentials: false
 
       - name: Run
+        env:
+          BETTERLEAKS_CONFIG: ${{ inputs.config-path }}
         # Redact matched secrets in public CI logs, though redaction does not replace revoking leaked keys
         run: |
           betterleaks git . --redact=100
