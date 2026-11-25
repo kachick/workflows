@@ -32,6 +32,11 @@ on:
         required: false
         type: string
         default: 'bot-update-flake-lock'
+      flake-inputs:
+        description: 'Space- or comma-separated flake inputs to update (empty updates all)'
+        required: false
+        type: string
+        default: ''
     secrets:
       APP_PRIVATE_KEY:
         description: 'GitHub App private key'
@@ -83,6 +88,7 @@ jobs:
           WORKFLOW_SHA: ${{ job.workflow_sha }}
           WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
           PR_BRANCH: ${{ inputs.branch-name }}
+          FLAKE_INPUTS: ${{ inputs.flake-inputs }}
           POST_COMMAND: ${{ inputs.post-commit-lock-file }}
           POST_COMMIT_TITLE: ${{ inputs.post-commit-lock-file-title }}
           PR_TITLE: ${{ inputs.pr-title }}
@@ -98,6 +104,7 @@ jobs:
 
           nix run "${FLAKE_REF}#bump-flake-lock" -- \
             --branch-name="${PR_BRANCH}" \
+            --flake-inputs="${FLAKE_INPUTS}" \
             --post-command="${POST_COMMAND}" \
             --post-commit-title="${POST_COMMIT_TITLE}" \
             --pr-title="${PR_TITLE}" \

@@ -38,11 +38,15 @@ func TestParseConfigDefaults(t *testing.T) {
 	if cfg.PRBody != "" {
 		t.Errorf("expected default pr-body '', got %q", cfg.PRBody)
 	}
+	if len(cfg.FlakeInputs) != 0 {
+		t.Errorf("expected default flake-inputs to be empty, got %v", cfg.FlakeInputs)
+	}
 }
 
 func TestParseConfigFlags(t *testing.T) {
 	args := []string{
 		"--branch-name=custom-branch",
+		"--flake-inputs=nixpkgs, home-manager",
 		"--post-command=echo update",
 		"--post-commit-title=custom title",
 		"--pr-title=Custom PR",
@@ -56,6 +60,9 @@ func TestParseConfigFlags(t *testing.T) {
 
 	if cfg.BranchName != "custom-branch" {
 		t.Errorf("expected 'custom-branch', got %q", cfg.BranchName)
+	}
+	if !slices.Equal(cfg.FlakeInputs, []string{"nixpkgs", "home-manager"}) {
+		t.Errorf("expected [nixpkgs home-manager], got %v", cfg.FlakeInputs)
 	}
 	if cfg.PostCommand != "echo update" {
 		t.Errorf("expected 'echo update', got %q", cfg.PostCommand)
@@ -73,6 +80,7 @@ func TestParseConfigFlags(t *testing.T) {
 
 func TestParseConfigEnvFallback(t *testing.T) {
 	t.Setenv("PR_BRANCH", "env-branch")
+	t.Setenv("FLAKE_INPUTS", "nixpkgs")
 	t.Setenv("POST_COMMAND", "env-command")
 	t.Setenv("PR_BODY", "env-body")
 
@@ -84,12 +92,35 @@ func TestParseConfigEnvFallback(t *testing.T) {
 	if cfg.BranchName != "env-branch" {
 		t.Errorf("expected branch from env, got %q", cfg.BranchName)
 	}
+	if !slices.Equal(cfg.FlakeInputs, []string{"nixpkgs"}) {
+		t.Errorf("expected flake-inputs from env, got %v", cfg.FlakeInputs)
+	}
 	if cfg.PostCommand != "env-command" {
 		t.Errorf("expected post-command from env, got %q", cfg.PostCommand)
 	}
 	if cfg.PRBody != "env-body" {
 		t.Errorf("expected pr-body from env, got %q", cfg.PRBody)
 	}
+}
+
+func TestParseFlakeInputs(t *testing.T) {
+	t.Run("rejects option-like input names", func(t *testing.T) {
+		if _, err := parseFlakeInputs("nixpkgs --override-input"); err == nil {
+			t.Fatal("expected error for input starting with '-', got nil")
+		}
+	})
+
+	t.Run("builds nix flake update arguments", func(t *testing.T) {
+		allArgs := buildUpdateArgs(nil)
+		if !slices.Equal(allArgs, []string{"flake", "update", "--commit-lock-file"}) {
+			t.Errorf("unexpected args for full update: %v", allArgs)
+		}
+
+		subsetArgs := buildUpdateArgs([]string{"nixpkgs", "home-manager"})
+		if !slices.Equal(subsetArgs, []string{"flake", "update", "--commit-lock-file", "nixpkgs", "home-manager"}) {
+			t.Errorf("unexpected args for subset update: %v", subsetArgs)
+		}
+	})
 }
 
 func TestBuildPRBody(t *testing.T) {

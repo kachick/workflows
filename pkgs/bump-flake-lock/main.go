@@ -16,12 +16,30 @@ import (
 
 type Config struct {
 	BranchName      string
+	FlakeInputs     []string
 	PostCommand     string
 	PostCommitTitle string
 	PRTitle         string
 	PRBody          string
 	GitUserName     string
 	GitUserEmail    string
+}
+
+func parseFlakeInputs(raw string) ([]string, error) {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
+	for _, field := range fields {
+		if strings.HasPrefix(field, "-") {
+			return nil, fmt.Errorf("invalid flake input name %q: must not start with '-'", field)
+		}
+	}
+	return fields, nil
+}
+
+func buildUpdateArgs(inputs []string) []string {
+	args := []string{"flake", "update", "--commit-lock-file"}
+	return append(args, inputs...)
 }
 
 func buildPRBody(customBody string, updates []flakeInputUpdate, meta workflowmeta.Metadata, isCI bool) (string, error) {
@@ -82,7 +100,9 @@ func parseConfig(args []string) (*Config, error) {
 	fs := flag.NewFlagSet("bump-flake-lock", flag.ContinueOnError)
 
 	cfg := &Config{}
+	var flakeInputsRaw string
 	fs.StringVar(&cfg.BranchName, "branch-name", "bot-update-flake-lock", "Branch name to push changes to")
+	fs.StringVar(&flakeInputsRaw, "flake-inputs", "", "Space- or comma-separated flake inputs to update (empty updates all)")
 	fs.StringVar(&cfg.PostCommand, "post-command", "", "Command to run after updating flake.lock")
 	fs.StringVar(&cfg.PostCommitTitle, "post-commit-title", "", "Commit message for post-command changes")
 	fs.StringVar(&cfg.PRTitle, "pr-title", "Bump flake.lock and related dependencies", "Title for the pull request")
@@ -98,6 +118,9 @@ func parseConfig(args []string) (*Config, error) {
 	if env := os.Getenv("PR_BRANCH"); env != "" && cfg.BranchName == "bot-update-flake-lock" {
 		cfg.BranchName = env
 	}
+	if env := os.Getenv("FLAKE_INPUTS"); env != "" && flakeInputsRaw == "" {
+		flakeInputsRaw = env
+	}
 	if env := os.Getenv("POST_COMMAND"); env != "" && cfg.PostCommand == "" {
 		cfg.PostCommand = env
 	}
@@ -110,6 +133,12 @@ func parseConfig(args []string) (*Config, error) {
 	if env := os.Getenv("PR_BODY"); env != "" && cfg.PRBody == "" {
 		cfg.PRBody = env
 	}
+
+	flakeInputs, err := parseFlakeInputs(flakeInputsRaw)
+	if err != nil {
+		return nil, err
+	}
+	cfg.FlakeInputs = flakeInputs
 
 	return cfg, nil
 }
@@ -172,7 +201,7 @@ func execute(ctx context.Context, cfg *Config) error {
 		return fmt.Errorf("failed to switch branch to %s: %w", cfg.BranchName, err)
 	}
 
-	if err := runCmd(ctx, env, "nix", "flake", "update", "--commit-lock-file"); err != nil {
+	if err := runCmd(ctx, env, "nix", buildUpdateArgs(cfg.FlakeInputs)...); err != nil {
 		return fmt.Errorf("failed to update flake.lock: %w", err)
 	}
 
