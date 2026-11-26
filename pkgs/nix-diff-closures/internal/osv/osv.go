@@ -14,6 +14,11 @@ import (
 // DefaultEndpoint is the public OSV batch query endpoint.
 const DefaultEndpoint = "https://api.osv.dev/v1/querybatch"
 
+// MaxBatchSize is the maximum number of queries allowed by OSV /v1/querybatch per request.
+const MaxBatchSize = 1000
+
+const maxPaginationRounds = 20
+
 // Package represents an updated or newly added package to query in OSV.
 type Package struct {
 	Name    string `json:"name"`
@@ -37,8 +42,9 @@ type batchQueryRequest struct {
 }
 
 type queryItem struct {
-	Package packageItem `json:"package"`
-	Version string      `json:"version"`
+	Package   packageItem `json:"package"`
+	Version   string      `json:"version"`
+	PageToken string      `json:"page_token,omitempty"`
 }
 
 type packageItem struct {
@@ -50,13 +56,15 @@ type batchQueryResponse struct {
 }
 
 type queryResult struct {
-	Vulns []Vulnerability `json:"vulns"`
+	Vulns         []Vulnerability `json:"vulns"`
+	NextPageToken string          `json:"next_page_token,omitempty"`
 }
 
 // Client queries the OSV API.
 type Client struct {
 	Endpoint   string
 	HTTPClient *http.Client
+	BatchSize  int
 }
 
 // NewClient returns a new OSV API client.
@@ -69,26 +77,12 @@ func NewClient(endpoint string) *Client {
 		HTTPClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
+		BatchSize: MaxBatchSize,
 	}
 }
 
-// QueryBatch queries OSV for vulnerabilities affecting the specified packages in a single batch request.
-func (c *Client) QueryBatch(ctx context.Context, pkgs []Package) ([]PackageVulnerabilities, error) {
-	if len(pkgs) == 0 {
-		return nil, nil
-	}
-
-	reqBody := batchQueryRequest{
-		Queries: make([]queryItem, 0, len(pkgs)),
-	}
-	for _, p := range pkgs {
-		reqBody.Queries = append(reqBody.Queries, queryItem{
-			Package: packageItem{Name: p.Name},
-			Version: p.Version,
-		})
-	}
-
-	data, err := json.Marshal(reqBody)
+func (c *Client) postBatch(ctx context.Context, queries []queryItem) ([]queryResult, error) {
+	data, err := json.Marshal(batchQueryRequest{Queries: queries})
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode OSV request: %w", err)
 	}
@@ -115,13 +109,78 @@ func (c *Client) QueryBatch(ctx context.Context, pkgs []Package) ([]PackageVulne
 		return nil, fmt.Errorf("failed to decode OSV response: %w", err)
 	}
 
-	if len(res.Results) != len(pkgs) {
-		return nil, fmt.Errorf("OSV response count mismatch: expected %d, got %d", len(pkgs), len(res.Results))
+	if len(res.Results) != len(queries) {
+		return nil, fmt.Errorf("OSV response count mismatch: expected %d, got %d", len(queries), len(res.Results))
+	}
+
+	return res.Results, nil
+}
+
+// QueryBatch queries OSV for vulnerabilities affecting the specified packages,
+// chunking requests to stay within OSV's batch limit and following next_page_token pagination.
+func (c *Client) QueryBatch(ctx context.Context, pkgs []Package) ([]PackageVulnerabilities, error) {
+	if len(pkgs) == 0 {
+		return nil, nil
+	}
+
+	batchSize := c.BatchSize
+	if batchSize <= 0 {
+		batchSize = MaxBatchSize
+	}
+
+	type pendingItem struct {
+		pkgIdx    int
+		pageToken string
+	}
+
+	collected := make([][]Vulnerability, len(pkgs))
+	pending := make([]pendingItem, len(pkgs))
+	for i := range pkgs {
+		pending[i] = pendingItem{pkgIdx: i}
+	}
+
+	for round := 0; len(pending) > 0; round++ {
+		if round >= maxPaginationRounds {
+			return nil, fmt.Errorf("OSV pagination exceeded %d rounds", maxPaginationRounds)
+		}
+
+		var nextPending []pendingItem
+		for start := 0; start < len(pending); start += batchSize {
+			end := min(start+batchSize, len(pending))
+			chunk := pending[start:end]
+
+			queries := make([]queryItem, len(chunk))
+			for i, item := range chunk {
+				p := pkgs[item.pkgIdx]
+				queries[i] = queryItem{
+					Package:   packageItem{Name: p.Name},
+					Version:   p.Version,
+					PageToken: item.pageToken,
+				}
+			}
+
+			results, err := c.postBatch(ctx, queries)
+			if err != nil {
+				return nil, err
+			}
+
+			for i, r := range results {
+				idx := chunk[i].pkgIdx
+				collected[idx] = append(collected[idx], r.Vulns...)
+				if r.NextPageToken != "" {
+					nextPending = append(nextPending, pendingItem{
+						pkgIdx:    idx,
+						pageToken: r.NextPageToken,
+					})
+				}
+			}
+		}
+		pending = nextPending
 	}
 
 	var affected []PackageVulnerabilities
-	for i, r := range res.Results {
-		filtered := FilterAllowedAdvisories(r.Vulns)
+	for i, vulns := range collected {
+		filtered := FilterAllowedAdvisories(vulns)
 		if len(filtered) > 0 {
 			affected = append(affected, PackageVulnerabilities{
 				Package:         pkgs[i],
@@ -150,7 +209,7 @@ func (c *Client) QueryBatch(ctx context.Context, pkgs []Package) ([]PackageVulne
 //     and pcre2 matched PYSEC (a Python package named "pcre2").
 //
 // Until OSV supports a first-class Nix/NixOS ecosystem or ecosystem-constrained batch queries,
-// we strictly allow only generic and ecosystem-audited feeds (GHSA, CVE, OSV).
+// only generic and ecosystem-audited feeds (GHSA, CVE, OSV) are allowed.
 // Real-world package vulnerabilities (such as Electron and pnpm CVEs/advisories) arrive via GHSA and CVE.
 var allowedAdvisoryPrefixes = []string{
 	"GHSA-",

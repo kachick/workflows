@@ -100,6 +100,11 @@ func parseVersions(part string) []string {
 		if strings.Contains(t, ".patch") {
 			continue
 		}
+		// Strip .drv suffix from derivation closure diffs so OSV version matching works against upstream versions.
+		t = strings.TrimSuffix(t, ".drv")
+		if t == "" {
+			continue
+		}
 		rawVersions = append(rawVersions, t)
 	}
 	return rawVersions

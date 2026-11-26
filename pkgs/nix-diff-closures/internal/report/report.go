@@ -49,6 +49,7 @@ type TargetResult struct {
 // VulnerabilityResult contains newly introduced, resolved, and pre-existing vulnerabilities detected by OSV.
 type VulnerabilityResult struct {
 	Checked       bool
+	ScanError     string
 	NewVulns      []osv.PackageVulnerabilities
 	ResolvedVulns []osv.PackageVulnerabilities
 	ExistingVulns []osv.PackageVulnerabilities
@@ -63,6 +64,7 @@ type Report struct {
 	FullWhyDependsText      string
 	FullVulnerabilitiesText string
 	HasDiff                 bool
+	HasErrors               bool
 	IsTruncated             bool
 	Vulnerabilities         []osv.PackageVulnerabilities // newly introduced (for backward compatibility)
 	ResolvedVulnerabilities []osv.PackageVulnerabilities
@@ -87,10 +89,16 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 	var fullTreeBuilder strings.Builder
 	var fullWhyDependsBuilder strings.Builder
 	hasAnyDiff := false
+	hasAnyError := vulns.ScanError != ""
+	changedTargets := 0
 
 	for _, res := range results {
+		if res.Error != "" {
+			hasAnyError = true
+		}
 		if res.DiffText != "" {
 			hasAnyDiff = true
+			changedTargets++
 			fullDiffBuilder.WriteString(fmt.Sprintf("=== Target: %s ===\n", res.Target))
 			fullDiffBuilder.WriteString(res.DiffText)
 			if !strings.HasSuffix(res.DiffText, "\n") {
@@ -119,7 +127,7 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 	fullDiff := fullDiffBuilder.String()
 	fullTree := fullTreeBuilder.String()
 	fullWhyDepends := fullWhyDependsBuilder.String()
-	if !hasAnyDiff {
+	if !hasAnyDiff && !hasAnyError {
 		return Report{
 			CommentMarkdown:     "",
 			StepSummaryMarkdown: "",
@@ -127,12 +135,14 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 			FullTreeText:        "",
 			FullWhyDependsText:  "",
 			HasDiff:             false,
+			HasErrors:           false,
 			IsTruncated:         false,
 		}, nil
 	}
 
 	isTruncated := len(fullDiff) > maxSize
-	targetHeadSize := headSize / len(results)
+	divisor := max(changedTargets, 1)
+	targetHeadSize := headSize / divisor
 
 	// Attempt 1: Standard layout with per-package CVE link limits
 	commentMarkdown := buildCommentMarkdown(results, vulns, isTruncated, len(fullDiff), targetHeadSize, meta, headerText, false)
@@ -169,7 +179,8 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 		FullTreeText:            fullTree,
 		FullWhyDependsText:      fullWhyDepends,
 		FullVulnerabilitiesText: FormatVulnerabilitiesText(vulns),
-		HasDiff:                 true,
+		HasDiff:                 hasAnyDiff,
+		HasErrors:               hasAnyError,
 		IsTruncated:             isTruncated,
 		Vulnerabilities:         vulns.NewVulns,
 		ResolvedVulnerabilities: vulns.ResolvedVulns,
@@ -181,6 +192,9 @@ func Build(results []TargetResult, vulns VulnerabilityResult, maxSize int, headS
 func FormatVulnerabilitiesText(vulns VulnerabilityResult) string {
 	if !vulns.Checked {
 		return "Vulnerability check was not enabled.\n"
+	}
+	if vulns.ScanError != "" {
+		return fmt.Sprintf("=== Vulnerability Scan Report ===\n\nERROR: Vulnerability scan failed: %s\n", vulns.ScanError)
 	}
 
 	var sb strings.Builder
@@ -239,12 +253,24 @@ func codeFenceFor(s string) string {
 	return fence
 }
 
+func inlineCode(s string) string {
+	delim := "`"
+	for strings.Contains(s, delim) {
+		delim += "`"
+	}
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
+		return delim + " " + s + " " + delim
+	}
+	return delim + s + delim
+}
+
 func formatVulnItems(pvs []osv.PackageVulnerabilities, maxPerPkg int, summarizeAll bool) string {
 	var sb strings.Builder
 	for _, pv := range pvs {
+		verCode := inlineCode(pv.Package.Version)
 		if summarizeAll {
-			sb.WriteString(fmt.Sprintf("> - **%s** (`%s`): %d known vulnerabilities (see `vulnerabilities.txt` artifact)\n",
-				html.EscapeString(pv.Package.Name), html.EscapeString(pv.Package.Version), len(pv.Vulnerabilities)))
+			sb.WriteString(fmt.Sprintf("> - **%s** (%s): %d known vulnerabilities (see `vulnerabilities.txt` artifact)\n",
+				html.EscapeString(pv.Package.Name), verCode, len(pv.Vulnerabilities)))
 			continue
 		}
 
@@ -264,7 +290,7 @@ func formatVulnItems(pvs []osv.PackageVulnerabilities, maxPerPkg int, summarizeA
 		if limit < total {
 			line += fmt.Sprintf(", and %d more (see `vulnerabilities.txt` artifact)", total-limit)
 		}
-		sb.WriteString(fmt.Sprintf("> - **%s** (`%s`): %s\n", html.EscapeString(pv.Package.Name), html.EscapeString(pv.Package.Version), line))
+		sb.WriteString(fmt.Sprintf("> - **%s** (%s): %s\n", html.EscapeString(pv.Package.Name), verCode, line))
 	}
 	return sb.String()
 }
@@ -277,7 +303,16 @@ func buildCommentMarkdown(results []TargetResult, vulns VulnerabilityResult, isT
 		md.WriteString(headerText + "\n\n")
 	}
 
-	if len(vulns.NewVulns) > 0 {
+	if vulns.ScanError != "" {
+		errText := vulns.ScanError
+		if len(errText) > MaxTargetErrorSize {
+			errText = TruncateUTF8Safe(errText, MaxTargetErrorSize) + "... (truncated)"
+		}
+		md.WriteString("> [!CAUTION]\n")
+		md.WriteString("> **Vulnerability Scan Failed**\n>\n")
+		md.WriteString(fmt.Sprintf("> OSV API scan could not complete: %s\n", inlineCode(strings.ReplaceAll(errText, "\n", " "))))
+		md.WriteString(">\n> *Note: This check fails intentionally when vulnerability scanning cannot complete, preventing unattended merges without verification.*\n\n")
+	} else if len(vulns.NewVulns) > 0 {
 		md.WriteString("> [!CAUTION]\n")
 		md.WriteString("> **Newly Introduced Vulnerabilities Detected in Updated Closure**\n>\n")
 		md.WriteString("> The following updated packages introduce new known vulnerabilities from the OSV database:\n")
@@ -295,7 +330,7 @@ func buildCommentMarkdown(results []TargetResult, vulns VulnerabilityResult, isT
 
 	artifactURL := fmt.Sprintf("%s#artifacts", meta.RunURL())
 	md.WriteString("> [!NOTE]\n")
-	if vulns.Checked && len(vulns.NewVulns) == 0 {
+	if vulns.Checked && vulns.ScanError == "" && len(vulns.NewVulns) == 0 {
 		md.WriteString("> **Vulnerability Scan**: No newly introduced vulnerabilities detected in updated closure.\n")
 	}
 	if isTruncated {
@@ -378,7 +413,7 @@ func EnsureSafeCommentLength(comment string, meta workflowmeta.Metadata) string 
 		sb.WriteString("> Full diff, dependency trees, and vulnerability reports are available in the Job Artifacts.\n\n")
 	}
 
-	headerLen := utf8.RuneCountInString(sb.String())
+	headerLen := len(sb.String())
 	remainingLimit := SafeCommentLimit - headerLen - 200
 	if remainingLimit > 1000 {
 		preview := TruncateUTF8Safe(comment, remainingLimit)

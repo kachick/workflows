@@ -164,6 +164,84 @@ func TestQueryBatch(t *testing.T) {
 			t.Fatal("expected error, got nil")
 		}
 	})
+
+	t.Run("chunks large batches and follows next_page_token", func(t *testing.T) {
+		calls := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			var req batchQueryRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("failed to decode request: %v", err)
+			}
+			if len(req.Queries) > 2 {
+				t.Fatalf("expected batch size <= 2, got %d", len(req.Queries))
+			}
+
+			res := batchQueryResponse{Results: make([]queryResult, len(req.Queries))}
+			for i, q := range req.Queries {
+				if q.Package.Name == "paged-pkg" && q.PageToken == "" {
+					res.Results[i] = queryResult{
+						Vulns:         []Vulnerability{{ID: "CVE-2026-0001"}},
+						NextPageToken: "page2",
+					}
+				} else if q.Package.Name == "paged-pkg" && q.PageToken == "page2" {
+					res.Results[i] = queryResult{
+						Vulns: []Vulnerability{{ID: "CVE-2026-0002"}},
+					}
+				} else if q.Package.Name == "third-pkg" {
+					res.Results[i] = queryResult{
+						Vulns: []Vulnerability{{ID: "GHSA-9999"}},
+					}
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(res)
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		client.BatchSize = 2
+		pkgs := []Package{
+			{Name: "paged-pkg", Version: "1.0.0"},
+			{Name: "clean-pkg", Version: "2.0.0"},
+			{Name: "third-pkg", Version: "3.0.0"},
+		}
+
+		results, err := client.QueryBatch(context.Background(), pkgs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if calls != 3 {
+			t.Fatalf("expected 3 HTTP calls (2 chunks + 1 next_page_token), got %d", calls)
+		}
+		expected := []PackageVulnerabilities{
+			{
+				Package:         Package{Name: "paged-pkg", Version: "1.0.0"},
+				Vulnerabilities: []Vulnerability{{ID: "CVE-2026-0001"}, {ID: "CVE-2026-0002"}},
+			},
+			{
+				Package:         Package{Name: "third-pkg", Version: "3.0.0"},
+				Vulnerabilities: []Vulnerability{{ID: "GHSA-9999"}},
+			},
+		}
+		if !reflect.DeepEqual(results, expected) {
+			t.Fatalf("expected %#v, got %#v", expected, results)
+		}
+	})
+
+	t.Run("fails on response result count mismatch", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[]}`))
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		_, err := client.QueryBatch(context.Background(), []Package{{Name: "pkg", Version: "1.0.0"}})
+		if err == nil {
+			t.Fatal("expected mismatch error, got nil")
+		}
+	})
 }
 
 func TestIsAllowedAdvisoryID(t *testing.T) {

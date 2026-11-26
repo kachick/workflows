@@ -447,6 +447,51 @@ func TestBuildReport(t *testing.T) {
 			t.Fatalf("comment markdown too large for truncated error: %d bytes", len(rep.CommentMarkdown))
 		}
 	})
+
+	t.Run("builds error report when all targets fail evaluation", func(t *testing.T) {
+		results := []TargetResult{
+			{
+				Target: "packages.x86_64-linux.broken",
+				Error:  "failed to evaluate derivation",
+			},
+		}
+		rep, err := Build(results, VulnerabilityResult{}, 10000, 5000, completeMeta, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !rep.HasErrors {
+			t.Fatal("expected HasErrors = true")
+		}
+		if rep.CommentMarkdown == "" || !strings.Contains(rep.CommentMarkdown, "failed to evaluate derivation") {
+			t.Fatalf("expected error details in comment markdown, got:\n%s", rep.CommentMarkdown)
+		}
+	})
+
+	t.Run("formats OSV scan failure with caution alert instead of clean note", func(t *testing.T) {
+		results := []TargetResult{
+			{
+				Target:   "devShells.x86_64-linux.default",
+				DiffText: "zod: 3.22.0 → 3.22.4\n",
+			},
+		}
+		vulnRes := VulnerabilityResult{
+			Checked:   true,
+			ScanError: "OSV API returned status 503",
+		}
+		rep, err := Build(results, vulnRes, DefaultMaxSize, DefaultHeadSize, completeMeta, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !rep.HasErrors {
+			t.Fatal("expected HasErrors = true when OSV scan failed")
+		}
+		if !strings.Contains(rep.CommentMarkdown, "**Vulnerability Scan Failed**") {
+			t.Fatalf("expected scan failure caution alert, got:\n%s", rep.CommentMarkdown)
+		}
+		if strings.Contains(rep.CommentMarkdown, "No newly introduced vulnerabilities detected") {
+			t.Fatalf("must not claim no vulnerabilities when OSV scan failed:\n%s", rep.CommentMarkdown)
+		}
+	})
 }
 
 func TestEnsureSafeCommentLength(t *testing.T) {

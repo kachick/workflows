@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/kachick/workflows/pkgs/nix-diff-closures/internal/report"
@@ -81,6 +82,23 @@ func (e *Engine) Run(ctx context.Context, baseRev string, rawTargets string) ([]
 	return results, nil
 }
 
+func escapeFileURLPath(p string) string {
+	parts := strings.Split(p, "/")
+	for i, seg := range parts {
+		parts[i] = url.PathEscape(seg)
+	}
+	return strings.Join(parts, "/")
+}
+
+func isMissingAttributeErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "does not provide attribute") ||
+		strings.Contains(msg, "attribute '") && strings.Contains(msg, "missing")
+}
+
 func (e *Engine) diffTarget(ctx context.Context, baseRev string, target string) report.TargetResult {
 	prInstallable := fmt.Sprintf(".#%s", target)
 	headDrv, err := e.Exec.Run(ctx, "nix", "path-info", "--derivation", prInstallable)
@@ -91,16 +109,22 @@ func (e *Engine) diffTarget(ctx context.Context, baseRev string, target string) 
 		}
 	}
 
-	// Escape baseRev to avoid breaking URL query or fragment syntax if unexpected characters are passed.
+	// Escape RepoDir and baseRev to avoid breaking URL syntax when special characters appear.
 	// NOTE: Avoid invoking `git rev-parse` here to keep the CLI simple and fast without extra subprocess calls.
-	baseInstallable := fmt.Sprintf("git+file://%s?rev=%s#%s", e.RepoDir, url.QueryEscape(baseRev), target)
+	baseInstallable := fmt.Sprintf("git+file://%s?rev=%s#%s", escapeFileURLPath(e.RepoDir), url.QueryEscape(baseRev), target)
 	baseDrv, err := e.Exec.Run(ctx, "nix", "path-info", "--derivation", baseInstallable)
 	if err != nil {
-		// If base evaluation fails, it might be a newly added target or removed attribute in base
+		if isMissingAttributeErr(err) {
+			return report.TargetResult{
+				Target:   target,
+				HeadDrv:  headDrv,
+				DiffText: fmt.Sprintf("(Target not found in base revision %s)\n", baseRev),
+			}
+		}
 		return report.TargetResult{
-			Target:   target,
-			HeadDrv:  headDrv,
-			DiffText: fmt.Sprintf("(Target not found in base revision %s)\n", baseRev),
+			Target:  target,
+			HeadDrv: headDrv,
+			Error:   fmt.Sprintf("failed to evaluate base derivation (%s): %v", baseInstallable, err),
 		}
 	}
 
@@ -217,11 +241,17 @@ func findMatchingDrv(pathMap map[string]string, pkg Package) string {
 		}
 	}
 
-	// Loose fallback in case version parsing differed slightly from drv filename
-	prefix := pkg.Name + "-"
-	for nameVer, p := range pathMap {
-		if strings.HasPrefix(nameVer, prefix) && strings.Contains(nameVer, pkg.Version) {
-			return p
+	// Deterministic fallback: match exact "<name>-<version>" followed by a delimiter (e.g. "-bin.drv").
+	keys := make([]string, 0, len(pathMap))
+	for k := range pathMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	prefix := strings.TrimSuffix(key, ".drv") + "-"
+	for _, nameVer := range keys {
+		if strings.HasPrefix(nameVer, prefix) {
+			return pathMap[nameVer]
 		}
 	}
 

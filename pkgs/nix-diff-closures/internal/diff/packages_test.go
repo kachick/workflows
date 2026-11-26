@@ -90,15 +90,15 @@ zod: 3.22.0 -> 3.22.4, +5.0 KiB
 	expectedBefore := []Package{
 		{Name: "acpi-call", Version: "2020-04-07-5.8.16"},
 		{Name: "kdeconnect", Version: "20.08.2"},
-		{Name: "nix", Version: "2.31.5.drv"},
-		{Name: "nix", Version: "2.34.8.drv"},
+		{Name: "nix", Version: "2.31.5"},
+		{Name: "nix", Version: "2.34.8"},
 		{Name: "zod", Version: "3.22.0"},
 	}
 	expectedAfter := []Package{
 		{Name: "acpi-call", Version: "2020-04-07-5.8.18"},
 		{Name: "kdeconnect-kde", Version: "20.08.2"},
-		{Name: "nix", Version: "2.31.6.drv"},
-		{Name: "nix", Version: "2.34.9.drv"},
+		{Name: "nix", Version: "2.31.6"},
+		{Name: "nix", Version: "2.34.9"},
 		{Name: "zod", Version: "3.22.4"},
 	}
 

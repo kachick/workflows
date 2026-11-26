@@ -174,6 +174,47 @@ func TestEngineRun(t *testing.T) {
 			t.Fatalf("expected DiffText = %q, got %q", expectedDiff, results[0].DiffText)
 		}
 	})
+
+	t.Run("records error when base evaluation fails for non-missing-attribute reason", func(t *testing.T) {
+		mockErr := &mockExecutor{
+			responses: map[string]string{
+				"nix [path-info --derivation .#devShells.x86_64-linux.default]": "/nix/store/111-drv",
+			},
+			errors: map[string]error{
+				"nix [path-info --derivation git+file:///repo?rev=bad-rev#devShells.x86_64-linux.default]": fmt.Errorf("exit status 1: cannot find Git revision 'bad-rev'"),
+			},
+		}
+		e := &Engine{Exec: mockErr, RepoDir: "/repo"}
+		results, err := e.Run(context.Background(), "bad-rev", "devShells.x86_64-linux.default")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if results[0].Error == "" {
+			t.Fatalf("expected TargetResult.Error to be populated, got %+v", results[0])
+		}
+	})
+
+	t.Run("marks newly added target when base revision lacks attribute", func(t *testing.T) {
+		mockMissing := &mockExecutor{
+			responses: map[string]string{
+				"nix [path-info --derivation .#packages.x86_64-linux.newpkg]": "/nix/store/111-drv",
+			},
+			errors: map[string]error{
+				"nix [path-info --derivation git+file:///repo?rev=base-sha#packages.x86_64-linux.newpkg]": fmt.Errorf("exit status 1: flake 'git+file:///repo?rev=base-sha' does not provide attribute 'packages.x86_64-linux.newpkg'"),
+			},
+		}
+		e := &Engine{Exec: mockMissing, RepoDir: "/repo"}
+		results, err := e.Run(context.Background(), "base-sha", "packages.x86_64-linux.newpkg")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if results[0].Error != "" {
+			t.Fatalf("expected no Error for new target, got %q", results[0].Error)
+		}
+		if results[0].DiffText != "(Target not found in base revision base-sha)\n" {
+			t.Fatalf("unexpected DiffText: %q", results[0].DiffText)
+		}
+	})
 }
 
 func TestNormalizeDiffOutput(t *testing.T) {
