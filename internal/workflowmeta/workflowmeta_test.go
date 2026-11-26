@@ -118,6 +118,26 @@ func TestMetadataBlobPermalink(t *testing.T) {
 			t.Errorf("got %q, want %q", got, expected)
 		}
 	})
+
+	t.Run("normalizes extra slashes", func(t *testing.T) {
+		meta := Metadata{
+			ServerURL:          "https://github.com/",
+			Repository:         "/kachick/workflows/",
+			RunID:              "123",
+			WorkflowRepository: "/kachick/workflows/",
+			WorkflowSHA:        "abcdef123456",
+			WorkflowFilePath:   "/.github/workflows/ci.yml",
+		}
+		if got, want := meta.RunURL(), "https://github.com/kachick/workflows/actions/runs/123"; got != want {
+			t.Errorf("RunURL() = %q, want %q", got, want)
+		}
+		if got, want := meta.WorkflowPermalink(), "https://github.com/kachick/workflows/blob/abcdef123456/.github/workflows/ci.yml"; got != want {
+			t.Errorf("WorkflowPermalink() = %q, want %q", got, want)
+		}
+		if got, want := meta.BlobPermalink("/README.md"), "https://github.com/kachick/workflows/blob/abcdef123456/README.md"; got != want {
+			t.Errorf("BlobPermalink() = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestGet(t *testing.T) {
@@ -168,6 +188,16 @@ func TestVerifyEnv(t *testing.T) {
 
 		if err := VerifyEnv(); err == nil {
 			t.Error("expected error for pull_request_target, got nil")
+		}
+	})
+
+	t.Run("in GitHub Actions rejects workflow_run", func(t *testing.T) {
+		t.Setenv("GITHUB_ACTIONS", "true")
+		t.Setenv("GITHUB_REPOSITORY_OWNER", "kachick")
+		t.Setenv("GITHUB_EVENT_NAME", "workflow_run")
+
+		if err := VerifyEnv(); err == nil {
+			t.Error("expected error for workflow_run, got nil")
 		}
 	})
 

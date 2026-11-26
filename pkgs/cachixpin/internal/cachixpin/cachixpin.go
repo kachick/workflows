@@ -17,18 +17,23 @@ var (
 	ErrEmptyPin         = errors.New("pin name must not be empty")
 	ErrInvalidRevisions = errors.New("keep-revisions must be greater than zero")
 	ErrEmptyStorePath   = errors.New("nix build produced an empty store path")
+	ErrInvalidStorePath = errors.New("nix build produced an invalid store path")
 )
 
 type Runner interface {
-	RunCombined(ctx context.Context, name string, args ...string) ([]byte, error)
+	RunCapture(ctx context.Context, name string, args ...string) (stdout, stderr []byte, err error)
 	RunInteractive(ctx context.Context, name string, args ...string) error
 }
 
 type defaultRunner struct{}
 
-func (defaultRunner) RunCombined(ctx context.Context, name string, args ...string) ([]byte, error) {
+func (defaultRunner) RunCapture(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	return cmd.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.Bytes(), stderr.Bytes(), err
 }
 
 func (defaultRunner) RunInteractive(ctx context.Context, name string, args ...string) error {
@@ -47,6 +52,40 @@ type Options struct {
 	Runner        Runner
 }
 
+// quoteNixString encodes s as a double-quoted Nix string literal.
+// Go's %q cannot be used because it leaves "${" unescaped (Nix interpolation)
+// and emits escape forms like \xNN that Nix rejects.
+func quoteNixString(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '$':
+			if i+1 < len(s) && s[i+1] == '{' {
+				b.WriteString(`\${`)
+				i++
+			} else {
+				b.WriteByte('$')
+			}
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
 // BuildLinkFarmExpr returns a Nix expression that collects all exposed packages
 // in the flake and combines them into a single linkFarm derivation.
 func BuildLinkFarmExpr(repoRoot string, pinName string) string {
@@ -54,21 +93,23 @@ func BuildLinkFarmExpr(repoRoot string, pinName string) string {
 	// Build a linkFarm that references every package in packages.${currentSystem}.
 	// Cachix pins closures, so pinning this single store path protects every package.
 	return fmt.Sprintf(`let
-  f = builtins.getFlake (toString %q);
+  f = builtins.getFlake (toString %s);
   system = builtins.currentSystem;
   pkgs = f.inputs.nixpkgs.legacyPackages.${system};
 in
-  pkgs.linkFarm %q (map (name: { inherit name; path = f.packages.${system}.${name}; }) (builtins.attrNames f.packages.${system}))`,
-		cleanPath,
-		pinName,
+  pkgs.linkFarm %s (map (name: { inherit name; path = f.packages.${system}.${name}; }) (builtins.attrNames f.packages.${system}))`,
+		quoteNixString(cleanPath),
+		quoteNixString(pinName),
 	)
 }
 
 func (opts *Options) Validate() error {
-	if strings.TrimSpace(opts.Cache) == "" {
+	opts.Cache = strings.TrimSpace(opts.Cache)
+	if opts.Cache == "" {
 		return ErrEmptyCache
 	}
-	if strings.TrimSpace(opts.Pin) == "" {
+	opts.Pin = strings.TrimSpace(opts.Pin)
+	if opts.Pin == "" {
 		return ErrEmptyPin
 	}
 	if opts.KeepRevisions <= 0 {
@@ -96,16 +137,23 @@ func Run(ctx context.Context, opts Options) error {
 	expr := BuildLinkFarmExpr(absRoot, opts.Pin)
 
 	fmt.Printf("Building linkFarm derivation for pin %q...\n", opts.Pin)
-	buildOutput, err := opts.Runner.RunCombined(ctx, "nix", "build", "--impure", "--no-link", "--print-out-paths", "--expr", expr)
+	stdout, stderr, err := opts.Runner.RunCapture(ctx, "nix", "build", "--impure", "--no-link", "--print-out-paths", "--expr", expr)
 	if err != nil {
-		return fmt.Errorf("nix build failed: %w (output: %s)", err, strings.TrimSpace(string(buildOutput)))
+		errOut := strings.TrimSpace(string(stderr))
+		if errOut == "" {
+			errOut = strings.TrimSpace(string(stdout))
+		}
+		return fmt.Errorf("nix build failed: %w (output: %s)", err, errOut)
 	}
 
-	lines := bytes.Split(bytes.TrimSpace(buildOutput), []byte("\n"))
+	lines := bytes.Split(bytes.TrimSpace(stdout), []byte("\n"))
 	if len(lines) == 0 || len(lines[len(lines)-1]) == 0 {
 		return ErrEmptyStorePath
 	}
-	storePath := string(lines[len(lines)-1])
+	storePath := strings.TrimSpace(string(lines[len(lines)-1]))
+	if !strings.HasPrefix(storePath, "/nix/store/") {
+		return fmt.Errorf("%w: %q", ErrInvalidStorePath, storePath)
+	}
 	fmt.Printf("Built store path: %s\n", storePath)
 
 	if opts.DryRun {

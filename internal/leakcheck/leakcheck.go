@@ -58,6 +58,9 @@ func (c *BetterleaksChecker) Check(ctx context.Context, input string) error {
 }
 
 func CheckMultiple(ctx context.Context, checker Checker, texts ...string) error {
+	if checker == nil {
+		return errors.New("leak checker must not be nil")
+	}
 	for _, text := range texts {
 		if err := checker.Check(ctx, text); err != nil {
 			return err

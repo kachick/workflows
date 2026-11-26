@@ -2,19 +2,38 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
 
-func TestComputeSchedules(t *testing.T) {
-	// Expected values match Zlib.crc32("kachick/workflows") (IEEE CRC-32).
-	got := computeSchedules("kachick/workflows")
-	want := schedules{
-		bumpFlakeLock: "29 5 1 * *",
-		automerge:     "29 */6 * * *",
+func TestComputeSchedulesRangeInvariants(t *testing.T) {
+	repos := []string{
+		"kachick/workflows",
+		"kachick/dotfiles",
+		"kachick/anylang-template",
+		"owner/a",
+		"owner/zzzzzzzz",
 	}
-	if got != want {
-		t.Fatalf("computeSchedules(%q) = %+v, want %+v", "kachick/workflows", got, want)
+
+	for _, repo := range repos {
+		got := computeSchedules(repo)
+
+		var bumpMin, bumpHour int
+		if n, err := fmt.Sscanf(got.bumpFlakeLock, "%d %d 1 * *", &bumpMin, &bumpHour); err != nil || n != 2 {
+			t.Fatalf("unexpected bump-flake-lock format for %q: %q", repo, got.bumpFlakeLock)
+		}
+		if bumpMin < 0 || bumpMin >= 60 || bumpHour < 0 || bumpHour >= 6 {
+			t.Errorf("bump-flake-lock out of range for %q: min=%d hour=%d", repo, bumpMin, bumpHour)
+		}
+
+		var autoMin int
+		if n, err := fmt.Sscanf(got.automerge, "%d */6 * * *", &autoMin); err != nil || n != 1 {
+			t.Fatalf("unexpected automerge format for %q: %q", repo, got.automerge)
+		}
+		if autoMin != bumpMin {
+			t.Errorf("automerge minute (%d) != bump-flake-lock minute (%d) for %q", autoMin, bumpMin, repo)
+		}
 	}
 }
 
@@ -44,6 +63,12 @@ func TestRun(t *testing.T) {
 			args:       []string{"--workflow", "automerge", "kachick/workflows"},
 			wantCode:   0,
 			wantStdout: "29 */6 * * *\n",
+		},
+		{
+			name:       "help flag exits cleanly",
+			args:       []string{"--help"},
+			wantCode:   0,
+			wantStderr: "Usage: recommend-schedule",
 		},
 		{
 			name:       "missing repo argument fails",
@@ -102,10 +127,14 @@ func TestRun(t *testing.T) {
 			if gotCode != tt.wantCode {
 				t.Fatalf("run(%v) exit code = %d, want %d (stderr: %s)", tt.args, gotCode, tt.wantCode, stderr.String())
 			}
-			if tt.wantStdout != "" && stdout.String() != tt.wantStdout {
+			if stdout.String() != tt.wantStdout {
 				t.Errorf("stdout =\n%q\nwant:\n%q", stdout.String(), tt.wantStdout)
 			}
-			if tt.wantStderr != "" && !strings.Contains(stderr.String(), tt.wantStderr) {
+			if tt.wantStderr == "" {
+				if stderr.Len() != 0 {
+					t.Errorf("unexpected stderr: %q", stderr.String())
+				}
+			} else if !strings.Contains(stderr.String(), tt.wantStderr) {
 				t.Errorf("stderr = %q, want substring %q", stderr.String(), tt.wantStderr)
 			}
 		})

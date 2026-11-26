@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 )
+
+const maxErrorBodyBytes = 4096
 
 // ErrPermissionDenied is returned when GitHub returns 403 Forbidden.
 var ErrPermissionDenied = errors.New("github api permission denied")
@@ -57,8 +60,9 @@ func (c *Client) FindOutdatedComments(ctx context.Context, owner, repo string, p
 	page := 1
 
 	for {
-		url := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments?per_page=100&page=%d", c.APIBaseURL, owner, repo, pr, page)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		endpoint := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments?per_page=100&page=%d",
+			c.APIBaseURL, url.PathEscape(owner), url.PathEscape(repo), pr, page)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -74,7 +78,7 @@ func (c *Client) FindOutdatedComments(ctx context.Context, owner, repo string, p
 			return nil, ErrPermissionDenied
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			body, _ := io.ReadAll(resp.Body)
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 			resp.Body.Close()
 			return nil, fmt.Errorf("github api error (%d): %s", resp.StatusCode, string(body))
 		}
@@ -142,8 +146,42 @@ func (c *Client) MinimizeComment(ctx context.Context, nodeID string) error {
 		return ErrPermissionDenied
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		return fmt.Errorf("graphql error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var gqlResp struct {
+		Data struct {
+			MinimizeComment struct {
+				MinimizedComment struct {
+					IsMinimized bool `json:"isMinimized"`
+				} `json:"minimizedComment"`
+			} `json:"minimizeComment"`
+		} `json:"data"`
+		Errors []struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&gqlResp); err != nil {
+		return fmt.Errorf("decode graphql response: %w", err)
+	}
+	if len(gqlResp.Errors) > 0 {
+		msgs := make([]string, 0, len(gqlResp.Errors))
+		forbidden := false
+		for _, e := range gqlResp.Errors {
+			if strings.EqualFold(e.Type, "FORBIDDEN") {
+				forbidden = true
+			}
+			msgs = append(msgs, e.Message)
+		}
+		if forbidden {
+			return fmt.Errorf("%w: %s", ErrPermissionDenied, strings.Join(msgs, "; "))
+		}
+		return fmt.Errorf("graphql error: %s", strings.Join(msgs, "; "))
+	}
+	if !gqlResp.Data.MinimizeComment.MinimizedComment.IsMinimized {
+		return fmt.Errorf("graphql minimizeComment did not mark comment %s as minimized", nodeID)
 	}
 
 	return nil
@@ -170,7 +208,8 @@ func (c *Client) MinimizeOutdatedComments(ctx context.Context, owner, repo strin
 
 // PostComment posts a new comment on the pull request.
 func (c *Client) PostComment(ctx context.Context, owner, repo string, pr int, body string) error {
-	url := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments", c.APIBaseURL, owner, repo, pr)
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments",
+		c.APIBaseURL, url.PathEscape(owner), url.PathEscape(repo), pr)
 	payload := map[string]string{
 		"body": body,
 	}
@@ -180,7 +219,7 @@ func (c *Client) PostComment(ctx context.Context, owner, repo string, pr int, bo
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -196,7 +235,7 @@ func (c *Client) PostComment(ctx context.Context, owner, repo string, pr int, bo
 		return ErrPermissionDenied
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		resBody, _ := io.ReadAll(resp.Body)
+		resBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		return fmt.Errorf("failed to post comment (%d): %s", resp.StatusCode, string(resBody))
 	}
 
@@ -206,6 +245,9 @@ func (c *Client) PostComment(ctx context.Context, owner, repo string, pr int, bo
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if req.Body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.Token))
 	}

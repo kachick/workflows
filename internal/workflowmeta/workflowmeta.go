@@ -3,6 +3,7 @@ package workflowmeta
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Metadata holds information about the GitHub Actions workflow run and definition.
@@ -43,22 +44,27 @@ func (m Metadata) IsComplete() bool {
 
 // RunURL returns the link to the GitHub Actions run.
 func (m Metadata) RunURL() string {
-	return fmt.Sprintf("%s/%s/actions/runs/%s", m.ServerURL, m.Repository, m.RunID)
+	return fmt.Sprintf("%s/%s/actions/runs/%s", strings.TrimRight(m.ServerURL, "/"), strings.Trim(m.Repository, "/"), m.RunID)
 }
 
 // WorkflowPermalink returns the link to the workflow definition file at the exact commit SHA.
 func (m Metadata) WorkflowPermalink() string {
-	return fmt.Sprintf("%s/%s/blob/%s/%s", m.ServerURL, m.WorkflowRepository, m.WorkflowSHA, m.WorkflowFilePath)
+	return fmt.Sprintf("%s/%s/blob/%s/%s",
+		strings.TrimRight(m.ServerURL, "/"),
+		strings.Trim(m.WorkflowRepository, "/"),
+		m.WorkflowSHA,
+		strings.TrimLeft(m.WorkflowFilePath, "/"),
+	)
 }
 
 // BlobPermalink returns a GitHub permalink to the specified repository-relative file path.
 // When workflow metadata is incomplete (such as in local runs), it falls back to the default repo and main branch.
 func (m Metadata) BlobPermalink(relativePath string) string {
-	serverURL := m.ServerURL
+	serverURL := strings.TrimRight(m.ServerURL, "/")
 	if serverURL == "" {
 		serverURL = "https://github.com"
 	}
-	repo := m.WorkflowRepository
+	repo := strings.Trim(m.WorkflowRepository, "/")
 	if repo == "" {
 		repo = "kachick/workflows"
 	}
@@ -66,7 +72,7 @@ func (m Metadata) BlobPermalink(relativePath string) string {
 	if rev == "" {
 		rev = "main"
 	}
-	return fmt.Sprintf("%s/%s/blob/%s/%s", serverURL, repo, rev, relativePath)
+	return fmt.Sprintf("%s/%s/blob/%s/%s", serverURL, repo, rev, strings.TrimLeft(relativePath, "/"))
 }
 
 // ShortWorkflowSHA returns the first 7 characters of WorkflowSHA for compact display.
@@ -102,7 +108,7 @@ func VerifyEnv() error {
 		return nil
 	}
 
-	if event := os.Getenv("GITHUB_EVENT_NAME"); event == "pull_request_target" {
+	if event := os.Getenv("GITHUB_EVENT_NAME"); event == "pull_request_target" || event == "workflow_run" {
 		return fmt.Errorf("refusing to run on unsafe event %q", event)
 	}
 

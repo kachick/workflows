@@ -1,7 +1,7 @@
 {
   lib,
   buildGo127Module,
-  makeWrapper,
+  makeBinaryWrapper,
   cachix,
 }:
 
@@ -23,7 +23,7 @@ buildGo127Module (finalAttrs: {
 
   subPackages = [ "pkgs/cachixpin" ];
 
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [ makeBinaryWrapper ];
 
   postInstall = ''
     wrapProgram $out/bin/cachixpin --prefix PATH : ${

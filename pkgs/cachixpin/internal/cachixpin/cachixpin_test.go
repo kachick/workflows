@@ -10,32 +10,38 @@ import (
 )
 
 type mockRunner struct {
-	combinedOutput []byte
-	combinedErr    error
-	recordedCalls  [][]string
-	interactiveErr error
+	stdout          []byte
+	stderr          []byte
+	captureErr      error
+	recordedCalls   [][]string
+	interactiveErrs []error
 }
 
-func (m *mockRunner) RunCombined(_ context.Context, name string, args ...string) ([]byte, error) {
+func (m *mockRunner) RunCapture(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
 	call := append([]string{name}, args...)
 	m.recordedCalls = append(m.recordedCalls, call)
-	return m.combinedOutput, m.combinedErr
+	return m.stdout, m.stderr, m.captureErr
 }
 
 func (m *mockRunner) RunInteractive(_ context.Context, name string, args ...string) error {
 	call := append([]string{name}, args...)
 	m.recordedCalls = append(m.recordedCalls, call)
-	return m.interactiveErr
+	if len(m.interactiveErrs) == 0 {
+		return nil
+	}
+	err := m.interactiveErrs[0]
+	m.interactiveErrs = m.interactiveErrs[1:]
+	return err
 }
 
 func TestBuildLinkFarmExpr(t *testing.T) {
-	expr := cachixpin.BuildLinkFarmExpr("/path/to/repo", "workflows")
+	expr := cachixpin.BuildLinkFarmExpr("/path/to/${repo}", `work"flows`)
 
-	if !strings.Contains(expr, `toString "/path/to/repo"`) {
-		t.Errorf("expression does not contain repository path: %s", expr)
+	if !strings.Contains(expr, `toString "/path/to/\${repo}"`) {
+		t.Errorf("expression must escape Nix interpolation in path: %s", expr)
 	}
-	if !strings.Contains(expr, `pkgs.linkFarm "workflows"`) {
-		t.Errorf("expression does not contain linkFarm pin name: %s", expr)
+	if !strings.Contains(expr, `pkgs.linkFarm "work\"flows"`) {
+		t.Errorf("expression must escape quotes in pin name: %s", expr)
 	}
 	if !strings.Contains(expr, "f.packages.${system}") {
 		t.Errorf("expression does not map all flake packages: %s", expr)
@@ -49,10 +55,10 @@ func TestValidate(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name: "valid options",
+			name: "valid options trims surrounding whitespace",
 			opts: cachixpin.Options{
-				Cache:         "kachick",
-				Pin:           "workflows",
+				Cache:         " kachick ",
+				Pin:           " workflows ",
 				KeepRevisions: 10,
 			},
 			wantErr: nil,
@@ -60,7 +66,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "missing cache",
 			opts: cachixpin.Options{
-				Cache:         "",
+				Cache:         "   ",
 				Pin:           "workflows",
 				KeepRevisions: 10,
 			},
@@ -70,17 +76,26 @@ func TestValidate(t *testing.T) {
 			name: "missing pin",
 			opts: cachixpin.Options{
 				Cache:         "kachick",
-				Pin:           "",
+				Pin:           "\t",
 				KeepRevisions: 10,
 			},
 			wantErr: cachixpin.ErrEmptyPin,
 		},
 		{
-			name: "non-positive keep-revisions",
+			name: "zero keep-revisions",
 			opts: cachixpin.Options{
 				Cache:         "kachick",
 				Pin:           "workflows",
 				KeepRevisions: 0,
+			},
+			wantErr: cachixpin.ErrInvalidRevisions,
+		},
+		{
+			name: "negative keep-revisions",
+			opts: cachixpin.Options{
+				Cache:         "kachick",
+				Pin:           "workflows",
+				KeepRevisions: -1,
 			},
 			wantErr: cachixpin.ErrInvalidRevisions,
 		},
@@ -92,18 +107,22 @@ func TestValidate(t *testing.T) {
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Validate() = %v, want %v", err, tt.wantErr)
 			}
+			if err == nil && (tt.opts.Cache != "kachick" || tt.opts.Pin != "workflows") {
+				t.Errorf("Validate() did not trim fields: cache=%q pin=%q", tt.opts.Cache, tt.opts.Pin)
+			}
 		})
 	}
 }
 
-func TestRun_Success(t *testing.T) {
+func TestRun_SuccessIgnoresStderrWarnings(t *testing.T) {
 	mock := &mockRunner{
-		combinedOutput: []byte("building...\n/nix/store/test-hash-workflows\n"),
+		stdout: []byte("/nix/store/test-hash-workflows\n"),
+		stderr: []byte("warning: Git tree is dirty\n"),
 	}
 
 	opts := cachixpin.Options{
-		Cache:         "kachick",
-		Pin:           "workflows",
+		Cache:         " kachick ",
+		Pin:           " workflows ",
 		KeepRevisions: 10,
 		RepoRoot:      ".",
 		Runner:        mock,
@@ -117,30 +136,17 @@ func TestRun_Success(t *testing.T) {
 		t.Fatalf("recordedCalls count = %d, want 3", len(mock.recordedCalls))
 	}
 
-	// 1. nix build
-	nixCall := mock.recordedCalls[0]
-	if nixCall[0] != "nix" || nixCall[1] != "build" {
-		t.Errorf("first command is not nix build: %v", nixCall)
+	if got, want := strings.Join(mock.recordedCalls[1], " "), "cachix push kachick /nix/store/test-hash-workflows"; got != want {
+		t.Errorf("push command = %q, want %q", got, want)
 	}
-
-	// 2. cachix push
-	pushCall := mock.recordedCalls[1]
-	expectedPush := []string{"cachix", "push", "kachick", "/nix/store/test-hash-workflows"}
-	if strings.Join(pushCall, " ") != strings.Join(expectedPush, " ") {
-		t.Errorf("push command mismatch: got %v, want %v", pushCall, expectedPush)
-	}
-
-	// 3. cachix pin
-	pinCall := mock.recordedCalls[2]
-	expectedPin := []string{"cachix", "pin", "kachick", "workflows", "/nix/store/test-hash-workflows", "--keep-revisions", "10"}
-	if strings.Join(pinCall, " ") != strings.Join(expectedPin, " ") {
-		t.Errorf("pin command mismatch: got %v, want %v", pinCall, expectedPin)
+	if got, want := strings.Join(mock.recordedCalls[2], " "), "cachix pin kachick workflows /nix/store/test-hash-workflows --keep-revisions 10"; got != want {
+		t.Errorf("pin command = %q, want %q", got, want)
 	}
 }
 
 func TestRun_DryRun(t *testing.T) {
 	mock := &mockRunner{
-		combinedOutput: []byte("/nix/store/test-hash-workflows\n"),
+		stdout: []byte("/nix/store/test-hash-workflows\n"),
 	}
 
 	opts := cachixpin.Options{
@@ -156,8 +162,70 @@ func TestRun_DryRun(t *testing.T) {
 		t.Fatalf("Run() unexpected error in dry-run: %v", err)
 	}
 
-	// In dry-run mode, only nix build should be executed, no cachix calls.
 	if len(mock.recordedCalls) != 1 {
 		t.Fatalf("recordedCalls count in dry-run = %d, want 1", len(mock.recordedCalls))
 	}
+}
+
+func TestRun_Errors(t *testing.T) {
+	baseOpts := func(m *mockRunner) cachixpin.Options {
+		return cachixpin.Options{
+			Cache:         "kachick",
+			Pin:           "workflows",
+			KeepRevisions: 10,
+			RepoRoot:      ".",
+			Runner:        m,
+		}
+	}
+
+	t.Run("empty stdout returns ErrEmptyStorePath", func(t *testing.T) {
+		mock := &mockRunner{stdout: []byte("  \n")}
+		if err := cachixpin.Run(context.Background(), baseOpts(mock)); !errors.Is(err, cachixpin.ErrEmptyStorePath) {
+			t.Fatalf("expected ErrEmptyStorePath, got %v", err)
+		}
+	})
+
+	t.Run("non-store path returns ErrInvalidStorePath", func(t *testing.T) {
+		mock := &mockRunner{stdout: []byte("warning: unexpected output\n")}
+		if err := cachixpin.Run(context.Background(), baseOpts(mock)); !errors.Is(err, cachixpin.ErrInvalidStorePath) {
+			t.Fatalf("expected ErrInvalidStorePath, got %v", err)
+		}
+	})
+
+	t.Run("nix build failure stops before cachix", func(t *testing.T) {
+		mock := &mockRunner{captureErr: errors.New("exit status 1"), stderr: []byte("eval error")}
+		err := cachixpin.Run(context.Background(), baseOpts(mock))
+		if err == nil || !strings.Contains(err.Error(), "eval error") {
+			t.Fatalf("expected nix build error with stderr, got %v", err)
+		}
+		if len(mock.recordedCalls) != 1 {
+			t.Fatalf("expected 1 call, got %d", len(mock.recordedCalls))
+		}
+	})
+
+	t.Run("cachix push failure stops before cachix pin", func(t *testing.T) {
+		mock := &mockRunner{
+			stdout:          []byte("/nix/store/test-hash-workflows\n"),
+			interactiveErrs: []error{errors.New("push failed")},
+		}
+		if err := cachixpin.Run(context.Background(), baseOpts(mock)); err == nil {
+			t.Fatal("expected error from cachix push, got nil")
+		}
+		if len(mock.recordedCalls) != 2 {
+			t.Fatalf("expected 2 calls (build + push), got %d", len(mock.recordedCalls))
+		}
+	})
+
+	t.Run("cachix pin failure returns error", func(t *testing.T) {
+		mock := &mockRunner{
+			stdout:          []byte("/nix/store/test-hash-workflows\n"),
+			interactiveErrs: []error{nil, errors.New("pin failed")},
+		}
+		if err := cachixpin.Run(context.Background(), baseOpts(mock)); err == nil {
+			t.Fatal("expected error from cachix pin, got nil")
+		}
+		if len(mock.recordedCalls) != 3 {
+			t.Fatalf("expected 3 calls, got %d", len(mock.recordedCalls))
+		}
+	})
 }

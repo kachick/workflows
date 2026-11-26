@@ -57,6 +57,31 @@ func TestCheckMultiple(t *testing.T) {
 			t.Fatalf("expected 2 calls, got %d", called)
 		}
 	})
+
+	t.Run("rejects nil checker", func(t *testing.T) {
+		if err := CheckMultiple(ctx, nil, "text"); err == nil {
+			t.Fatal("expected error for nil checker, got nil")
+		}
+	})
+}
+
+func TestBetterleaksCheckerEdgeCases(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty or whitespace input skips scanner", func(t *testing.T) {
+		checker := &BetterleaksChecker{Command: "nonexistent-betterleaks-binary"}
+		if err := checker.Check(ctx, "   \n\t  "); err != nil {
+			t.Fatalf("expected nil for whitespace input, got %v", err)
+		}
+	})
+
+	t.Run("missing binary returns ErrScannerNotFound", func(t *testing.T) {
+		checker := &BetterleaksChecker{Command: "nonexistent-betterleaks-binary-xyz"}
+		err := checker.Check(ctx, "some content")
+		if !errors.Is(err, ErrScannerNotFound) {
+			t.Fatalf("expected ErrScannerNotFound, got %v", err)
+		}
+	})
 }
 
 func TestBetterleaksChecker(t *testing.T) {
