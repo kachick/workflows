@@ -22,6 +22,17 @@ import (
 	"github.com/kachick/workflows/internal/workflowmeta"
 )
 
+type noopLeakChecker struct{}
+
+func (noopLeakChecker) Check(_ context.Context, _ string) error { return nil }
+
+func TestMain(m *testing.M) {
+	// Keep unit tests hermetic when betterleaks is not in PATH (e.g. Nix checkPhase).
+	// Real betterleaks execution is covered in internal/leakcheck tests.
+	outputLeakChecker = noopLeakChecker{}
+	os.Exit(m.Run())
+}
+
 func TestParseConfigDefaults(t *testing.T) {
 	cfg, err := parseConfig([]string{})
 	if err != nil {

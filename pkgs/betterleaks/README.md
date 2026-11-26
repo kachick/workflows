@@ -9,6 +9,7 @@ jobs:
   betterleaks:
     uses: kachick/workflows/.github/workflows/reusable-betterleaks.yml@main
     with:
+      betterleaks-version: '1.10.1' # optional
       config-path: '.betterleaks.toml' # optional
 ```
 
@@ -29,3 +30,4 @@ jobs:
   - Running betterleaks via this reusable workflow intentionally decouples the tool version from each caller repository's `flake.lock`.
   - Caller repository flakes typically update only once a month (for example, via `bump-flake-lock`), while secret detection rules update more frequently upstream.
   - For secret scanning, using newer releases to avoid missing newly added secret patterns is a more important security trade-off than strictly pinning reproducible tool behavior to older flake inputs.
+  - Trade-off: Upstream releases sign `checksums.txt` with `cosign` blob bundles rather than GitHub SLSA attestations, so this workflow verifies SHA-256 checksums without pulling in third-party `cosign` installer actions outside the allowed action owners (`kachick/`, `actions/`, `NixOS/`).

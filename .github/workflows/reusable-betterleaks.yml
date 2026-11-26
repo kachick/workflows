@@ -28,24 +28,36 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 15
     steps:
-      - name: Download
-        working-directory: ${{ runner.temp }}
+      - name: Download and install
         env:
           GH_TOKEN: ${{ github.token }}
           CLI_VERSION: ${{ inputs.betterleaks-version }}
-        # Prefer the gh command over curl to avoid hitting GitHub API rate limits
+        # Prefer the gh command over curl to avoid hitting GitHub API rate limits.
+        # Why not verify checksums.txt.sigstore.json with `gh attestation verify` or `cosign`:
+        # Upstream signs checksums.txt as a cosign blob bundle rather than a GitHub SLSA attestation,
+        # and this repository restricts external actions to kachick/, actions/, and NixOS/.
         run: |
           set -euo pipefail
-          ARCHIVE="betterleaks_${CLI_VERSION}_linux_x64.tar.gz"
-          gh release download "v${CLI_VERSION}" --skip-existing --repo betterleaks/betterleaks --pattern "${ARCHIVE}" --pattern 'checksums.txt'
-          grep --fixed-strings "  ${ARCHIVE}" checksums.txt | sha256sum --check -
+          if [[ ! "${CLI_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid betterleaks-version '${CLI_VERSION}': expected X.Y.Z" >&2
+            exit 1
+          fi
 
-      - name: Install
-        working-directory: ${{ runner.temp }}
-        env:
-          CLI_VERSION: ${{ inputs.betterleaks-version }}
-        run: |
-          tar zxvf "betterleaks_${CLI_VERSION}_linux_x64.tar.gz"
+          WORKDIR="$(mktemp -d "${RUNNER_TEMP}/betterleaks.XXXXXX")"
+          trap 'rm -rf "${WORKDIR}"' EXIT
+          cd "${WORKDIR}"
+
+          ARCHIVE="betterleaks_${CLI_VERSION}_linux_x64.tar.gz"
+          gh release download "v${CLI_VERSION}" --clobber --repo betterleaks/betterleaks --pattern "${ARCHIVE}" --pattern 'checksums.txt'
+
+          EXPECTED_LINE="$(awk -v target="${ARCHIVE}" '$2 == target { print }' checksums.txt)"
+          if [ -z "${EXPECTED_LINE}" ]; then
+            echo "::error::Checksum entry not found for ${ARCHIVE}" >&2
+            exit 1
+          fi
+          printf '%s\n' "${EXPECTED_LINE}" | sha256sum --check -
+
+          tar -zxf "${ARCHIVE}"
           mkdir --parents "${RUNNER_TEMP}/bin"
           mv betterleaks "${RUNNER_TEMP}/bin/"
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"

@@ -15,6 +15,21 @@ Minimize outdated bot comments matching pattern on a pull request.
 
 ## Usage
 
+### Reusable Workflow
+
+```yaml
+jobs:
+  minimize:
+    uses: kachick/workflows/.github/workflows/reusable-minimize-pr-comments.yml@main
+    with:
+      pr-number: ${{ github.event.pull_request.number }}
+      body-includes: '<!-- comment-marker -->'
+```
+
+### CLI
+
+Set `GITHUB_TOKEN` (or `GH_TOKEN`) or pass `--token`:
+
 ```console
 nix run github:kachick/workflows#minimize-pr-comments -- \
   --owner="<owner>" \

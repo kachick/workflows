@@ -15,7 +15,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   tasks:
@@ -38,7 +38,7 @@ jobs:
       - name: Load environment variables
         run: |
           direnv allow .
-          direnv export gha > "$GITHUB_ENV"
+          direnv export gha >> "$GITHUB_ENV"
       - run: nix flake check
       - run: nix flake show
       - run: task check

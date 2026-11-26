@@ -34,7 +34,7 @@ jobs:
 
 ### Tips: Distribute Schedules Across Repositories
 
-See [Distribute Schedules Across Repositories](../../README.md#distribute-schedules-across-repositories) in the root README for recommended schedule rules and helper scripts.
+See [Distribute Schedules Across Repositories](../../docs/onboarding.md#distribute-schedules-across-repositories) in the onboarding guide for recommended schedule rules and helper scripts.
 
 ### CLI
 

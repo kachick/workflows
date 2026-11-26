@@ -34,7 +34,6 @@
 ### Restrict and pin external GitHub Actions
 
 - Allow external actions only from `kachick/`, `actions/`, and `NixOS/`.
-- Other actions used today are transitional. See https://github.com/kachick/anylang-template/issues/323 for details.
 - Actions are currently pinned to commit SHAs. Plan to introduce https://github.com/github/gh-actions-lock in the future.
 
 ### Minimal tooling
@@ -56,6 +55,7 @@
 - **Reduce supply chain risks for external tools**:
   - Most logic is built directly in Go, but some external tools like `betterleaks` and `osv-scanner` are still necessary.
   - Instead of trusting upstream GitHub release binaries, using packages built by Hydra through nixpkgs reduces supply chain risks in deployment workflows.
+  - Exception: [`reusable-betterleaks.yml`](.github/workflows/reusable-betterleaks.yml) intentionally downloads the upstream binary directly so secret detection rules update faster than monthly caller flake bumps; see [`pkgs/betterleaks/README.md`](pkgs/betterleaks/README.md) for the trade-off.
   - This provides an established platform alternative to the current trend of requiring build attestations for each separate tool.
   - However, this approach does not stop all risks. For example, the recent malicious commit to Zod happened directly on the source repository rather than in the package release pipeline.
 - **Frictionless revision deployment**:
