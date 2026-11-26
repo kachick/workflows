@@ -1,7 +1,8 @@
 {
   lib,
   buildGo127Module,
-  makeWrapper,
+  makeBinaryWrapper,
+  betterleaks,
   osv-scanner,
   git,
   gnutar,
@@ -26,11 +27,12 @@ buildGo127Module (finalAttrs: {
 
   subPackages = [ "pkgs/automerge" ];
 
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [ makeBinaryWrapper ];
 
   postInstall = ''
     wrapProgram $out/bin/automerge --prefix PATH : ${
       lib.makeBinPath [
+        betterleaks
         osv-scanner
         git
         gnutar

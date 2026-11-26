@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/kachick/workflows/internal/leakcheck"
 	"github.com/kachick/workflows/internal/workflowmeta"
 )
 
@@ -101,6 +106,144 @@ func TestParseConfigEnvFallback(t *testing.T) {
 	if cfg.PRBody != "env-body" {
 		t.Errorf("expected pr-body from env, got %q", cfg.PRBody)
 	}
+}
+
+func TestParseConfigFlagPrecedenceAndValidation(t *testing.T) {
+	t.Run("explicit default CLI flag overrides env var", func(t *testing.T) {
+		t.Setenv("PR_BRANCH", "env-branch")
+		t.Setenv("PR_TITLE", "env-title")
+
+		cfg, err := parseConfig([]string{
+			"--branch-name=bot-update-flake-lock",
+			"--pr-title=Bump flake.lock and related dependencies",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.BranchName != "bot-update-flake-lock" {
+			t.Errorf("expected CLI branch-name, got %q", cfg.BranchName)
+		}
+		if cfg.PRTitle != "Bump flake.lock and related dependencies" {
+			t.Errorf("expected CLI pr-title, got %q", cfg.PRTitle)
+		}
+	})
+
+	t.Run("rejects branch name starting with dash", func(t *testing.T) {
+		if _, err := parseConfig([]string{"--branch-name=-bad"}); err == nil {
+			t.Fatal("expected error for branch-name starting with '-', got nil")
+		}
+	})
+}
+
+type fakeBumpRunner struct {
+	outputs map[string]string
+	runErrs map[string]error
+	calls   []string
+}
+
+func (f *fakeBumpRunner) Run(_ context.Context, _ []string, name string, args ...string) error {
+	key := fmt.Sprintf("%s %s", name, strings.Join(args, " "))
+	f.calls = append(f.calls, key)
+	if err, ok := f.runErrs[key]; ok {
+		return err
+	}
+	return nil
+}
+
+func (f *fakeBumpRunner) Output(_ context.Context, _ []string, name string, args ...string) (string, error) {
+	key := fmt.Sprintf("%s %s", name, strings.Join(args, " "))
+	f.calls = append(f.calls, key)
+	if out, ok := f.outputs[key]; ok {
+		return out, nil
+	}
+	return "", fmt.Errorf("no fake output for %q", key)
+}
+
+type fakeLeakChecker struct {
+	err error
+}
+
+func (f fakeLeakChecker) Check(_ context.Context, _ string) error {
+	return f.err
+}
+
+func TestExecuteWorkflows(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "false")
+
+	t.Run("stops early when no commits were added and uses initial branch fallback", func(t *testing.T) {
+		runner := &fakeBumpRunner{
+			outputs: map[string]string{
+				"git rev-parse --abbrev-ref HEAD":      "master",
+				"git rev-list --count origin/master..": "0",
+			},
+		}
+		cfg := &Config{BranchName: "bot-update-flake-lock", PRTitle: "Bump"}
+		if err := execute(context.Background(), cfg, runner, fakeLeakChecker{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, c := range runner.calls {
+			if strings.HasPrefix(c, "git push") || strings.HasPrefix(c, "gh ") {
+				t.Errorf("should not push or invoke gh when count == 0, saw %q", c)
+			}
+		}
+	})
+
+	t.Run("aborts before push when leakcheck fails", func(t *testing.T) {
+		runner := &fakeBumpRunner{
+			outputs: map[string]string{
+				"git rev-parse --abbrev-ref HEAD":    "main",
+				"git rev-list --count origin/main..": "1",
+				"git diff origin/main..":             "diff content",
+				"git log --format=%B origin/main..":  "commit msg",
+			},
+		}
+		cfg := &Config{BranchName: "bot-update-flake-lock", PRTitle: "Bump"}
+		err := execute(context.Background(), cfg, runner, fakeLeakChecker{err: leakcheck.ErrLeakDetected})
+		if !errors.Is(err, leakcheck.ErrLeakDetected) {
+			t.Fatalf("expected ErrLeakDetected, got %v", err)
+		}
+		for _, c := range runner.calls {
+			if strings.HasPrefix(c, "git push") || strings.HasPrefix(c, "gh ") {
+				t.Errorf("must not push or call gh after leak check failure, saw %q", c)
+			}
+		}
+	})
+
+	t.Run("creates PR when none is open and edits PR when already open", func(t *testing.T) {
+		for _, tc := range []struct {
+			name     string
+			prState  string
+			wantCall string
+		}{
+			{"create new PR", "", "gh pr create"},
+			{"edit open PR", "OPEN", "gh pr edit"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				runner := &fakeBumpRunner{
+					outputs: map[string]string{
+						"git rev-parse --abbrev-ref HEAD":                           "main",
+						"git rev-list --count origin/main..":                        "1",
+						"git diff origin/main..":                                    "diff",
+						"git log --format=%B origin/main..":                         "msg",
+						"gh pr view bot-update-flake-lock --json state --jq .state": tc.prState,
+					},
+				}
+				cfg := &Config{BranchName: "bot-update-flake-lock", PRTitle: "Bump"}
+				if err := execute(context.Background(), cfg, runner, fakeLeakChecker{}); err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				found := false
+				for _, c := range runner.calls {
+					if strings.HasPrefix(c, tc.wantCall) {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("expected call starting with %q, got calls: %v", tc.wantCall, runner.calls)
+				}
+			})
+		}
+	})
 }
 
 func TestParseFlakeInputs(t *testing.T) {

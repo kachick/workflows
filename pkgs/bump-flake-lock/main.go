@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -25,6 +26,38 @@ type Config struct {
 	GitUserEmail    string
 }
 
+type commandRunner interface {
+	Run(ctx context.Context, env []string, name string, args ...string) error
+	Output(ctx context.Context, env []string, name string, args ...string) (string, error)
+}
+
+type defaultCommandRunner struct{}
+
+func (defaultCommandRunner) Run(ctx context.Context, env []string, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if len(env) > 0 {
+		cmd.Env = env
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
+func (defaultCommandRunner) Output(ctx context.Context, env []string, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if len(env) > 0 {
+		cmd.Env = env
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
 func parseFlakeInputs(raw string) ([]string, error) {
 	fields := strings.FieldsFunc(raw, func(r rune) bool {
 		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
@@ -35,6 +68,20 @@ func parseFlakeInputs(raw string) ([]string, error) {
 		}
 	}
 	return fields, nil
+}
+
+func validateBranchName(branch string) error {
+	trimmed := strings.TrimSpace(branch)
+	if trimmed == "" {
+		return errors.New("branch-name must not be empty")
+	}
+	if strings.HasPrefix(trimmed, "-") {
+		return fmt.Errorf("invalid branch-name %q: must not start with '-'", trimmed)
+	}
+	if strings.ContainsAny(trimmed, " \t\r\n") {
+		return fmt.Errorf("invalid branch-name %q: must not contain whitespace", trimmed)
+	}
+	return nil
 }
 
 func buildUpdateArgs(inputs []string) []string {
@@ -60,12 +107,12 @@ func buildPRBody(customBody string, updates []flakeInputUpdate, meta workflowmet
 	return strings.Join(parts, "\n\n"), nil
 }
 
-func collectFlakeLockUpdates(ctx context.Context, env []string, defaultBranch string) []flakeInputUpdate {
-	oldLock, err := runCmdOutput(ctx, env, "git", "show", fmt.Sprintf("origin/%s:flake.lock", defaultBranch))
+func collectFlakeLockUpdates(ctx context.Context, runner commandRunner, env []string, defaultBranch string) []flakeInputUpdate {
+	oldLock, err := runner.Output(ctx, env, "git", "show", fmt.Sprintf("origin/%s:flake.lock", defaultBranch))
 	if err != nil {
 		return nil
 	}
-	newLock, err := runCmdOutput(ctx, env, "git", "show", "HEAD:flake.lock")
+	newLock, err := runner.Output(ctx, env, "git", "show", "HEAD:flake.lock")
 	if err != nil {
 		return nil
 	}
@@ -79,6 +126,9 @@ func collectFlakeLockUpdates(ctx context.Context, env []string, defaultBranch st
 
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -93,7 +143,7 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return execute(ctx, cfg)
+	return execute(ctx, cfg, defaultCommandRunner{}, &leakcheck.BetterleaksChecker{})
 }
 
 func parseConfig(args []string) (*Config, error) {
@@ -114,24 +164,46 @@ func parseConfig(args []string) (*Config, error) {
 		return nil, err
 	}
 
-	// Environment variable fallbacks for GitHub Actions
-	if env := os.Getenv("PR_BRANCH"); env != "" && cfg.BranchName == "bot-update-flake-lock" {
-		cfg.BranchName = env
+	explicit := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) {
+		explicit[f.Name] = true
+	})
+
+	// Environment variable fallbacks for GitHub Actions (only when not explicitly set via CLI flags).
+	if !explicit["branch-name"] {
+		if env := os.Getenv("PR_BRANCH"); env != "" {
+			cfg.BranchName = env
+		}
 	}
-	if env := os.Getenv("FLAKE_INPUTS"); env != "" && flakeInputsRaw == "" {
-		flakeInputsRaw = env
+	if !explicit["flake-inputs"] {
+		if env := os.Getenv("FLAKE_INPUTS"); env != "" {
+			flakeInputsRaw = env
+		}
 	}
-	if env := os.Getenv("POST_COMMAND"); env != "" && cfg.PostCommand == "" {
-		cfg.PostCommand = env
+	if !explicit["post-command"] {
+		if env := os.Getenv("POST_COMMAND"); env != "" {
+			cfg.PostCommand = env
+		}
 	}
-	if env := os.Getenv("POST_COMMIT_TITLE"); env != "" && cfg.PostCommitTitle == "" {
-		cfg.PostCommitTitle = env
+	if !explicit["post-commit-title"] {
+		if env := os.Getenv("POST_COMMIT_TITLE"); env != "" {
+			cfg.PostCommitTitle = env
+		}
 	}
-	if env := os.Getenv("PR_TITLE"); env != "" && cfg.PRTitle == "Bump flake.lock and related dependencies" {
-		cfg.PRTitle = env
+	if !explicit["pr-title"] {
+		if env := os.Getenv("PR_TITLE"); env != "" {
+			cfg.PRTitle = env
+		}
 	}
-	if env := os.Getenv("PR_BODY"); env != "" && cfg.PRBody == "" {
-		cfg.PRBody = env
+	if !explicit["pr-body"] {
+		if env := os.Getenv("PR_BODY"); env != "" {
+			cfg.PRBody = env
+		}
+	}
+
+	cfg.BranchName = strings.TrimSpace(cfg.BranchName)
+	if err := validateBranchName(cfg.BranchName); err != nil {
+		return nil, err
 	}
 
 	flakeInputs, err := parseFlakeInputs(flakeInputsRaw)
@@ -169,53 +241,42 @@ func filterEnv(env []string, droppedPrefixes ...string) []string {
 	return filtered
 }
 
-func runCmd(ctx context.Context, env []string, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
-	if len(env) > 0 {
-		cmd.Env = env
+func resolveDefaultBranch(ctx context.Context, runner commandRunner, env []string, initialBranch string) string {
+	if sym, err := runner.Output(ctx, env, "git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil && sym != "" {
+		return strings.TrimPrefix(sym, "origin/")
 	}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	return cmd.Run()
+	if initialBranch != "" && initialBranch != "HEAD" {
+		return initialBranch
+	}
+	if refName := strings.TrimSpace(os.Getenv("GITHUB_REF_NAME")); refName != "" {
+		return refName
+	}
+	return "main"
 }
 
-func runCmdOutput(ctx context.Context, env []string, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	if len(env) > 0 {
-		cmd.Env = env
-	}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	return strings.TrimSpace(stdout.String()), nil
-}
-
-func execute(ctx context.Context, cfg *Config) error {
+func execute(ctx context.Context, cfg *Config, runner commandRunner, checker leakcheck.Checker) error {
 	env := gitEnv(cfg)
 
-	if err := runCmd(ctx, env, "git", "switch", "-C", cfg.BranchName); err != nil {
+	// Capture checked-out branch before switching so repositories with non-"main" default branches
+	// still resolve the base branch when actions/checkout leaves refs/remotes/origin/HEAD unset.
+	initialBranch, _ := runner.Output(ctx, env, "git", "rev-parse", "--abbrev-ref", "HEAD")
+
+	if err := runner.Run(ctx, env, "git", "switch", "-C", cfg.BranchName); err != nil {
 		return fmt.Errorf("failed to switch branch to %s: %w", cfg.BranchName, err)
 	}
 
-	if err := runCmd(ctx, env, "nix", buildUpdateArgs(cfg.FlakeInputs)...); err != nil {
+	if err := runner.Run(ctx, env, "nix", buildUpdateArgs(cfg.FlakeInputs)...); err != nil {
 		return fmt.Errorf("failed to update flake.lock: %w", err)
 	}
 
 	if cfg.PostCommand != "" {
-		cmd := exec.CommandContext(ctx, "sh", "-c", cfg.PostCommand)
 		// Avoid passing powerful GitHub tokens to external post-update commands.
-		cmd.Env = filterEnv(env, "GITHUB_TOKEN=", "GH_TOKEN=")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
+		postEnv := filterEnv(env, "GITHUB_TOKEN=", "GH_TOKEN=")
+		if err := runner.Run(ctx, postEnv, "sh", "-c", cfg.PostCommand); err != nil {
 			return fmt.Errorf("failed to run post-command: %w", err)
 		}
 
-		status, err := runCmdOutput(ctx, env, "git", "status", "--porcelain")
+		status, err := runner.Output(ctx, env, "git", "status", "--porcelain")
 		if err != nil {
 			return fmt.Errorf("failed to check git status: %w", err)
 		}
@@ -224,34 +285,28 @@ func execute(ctx context.Context, cfg *Config) error {
 			if title == "" {
 				title = cfg.PostCommand
 			}
-			checker := &leakcheck.BetterleaksChecker{}
 			if err := checker.Check(ctx, title); err != nil {
 				return fmt.Errorf("pre-flight leak check failed for post-command commit message: %w", err)
 			}
-			if err := runCmd(ctx, env, "git", "add", "-A"); err != nil {
+			if err := runner.Run(ctx, env, "git", "add", "-A"); err != nil {
 				return fmt.Errorf("failed to stage post-command changes: %w", err)
 			}
-			stagedDiff, err := runCmdOutput(ctx, env, "git", "diff", "--cached")
+			stagedDiff, err := runner.Output(ctx, env, "git", "diff", "--cached")
 			if err != nil {
 				return fmt.Errorf("failed to get staged diff for post-command changes: %w", err)
 			}
 			if err := checker.Check(ctx, stagedDiff); err != nil {
 				return fmt.Errorf("pre-flight leak check failed for post-command staged diff: %w", err)
 			}
-			if err := runCmd(ctx, env, "git", "commit", "--no-gpg-sign", "-m", title); err != nil {
+			if err := runner.Run(ctx, env, "git", "commit", "--no-gpg-sign", "-m", title); err != nil {
 				return fmt.Errorf("failed to commit post-command changes: %w", err)
 			}
 		}
 	}
 
-	defaultBranch, err := runCmdOutput(ctx, env, "git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-	if err != nil || defaultBranch == "" {
-		defaultBranch = "main"
-	} else {
-		defaultBranch = strings.TrimPrefix(defaultBranch, "origin/")
-	}
+	defaultBranch := resolveDefaultBranch(ctx, runner, env, initialBranch)
 
-	countStr, err := runCmdOutput(ctx, env, "git", "rev-list", "--count", fmt.Sprintf("origin/%s..", defaultBranch))
+	countStr, err := runner.Output(ctx, env, "git", "rev-list", "--count", fmt.Sprintf("origin/%s..", defaultBranch))
 	if err != nil {
 		return fmt.Errorf("failed to count commits ahead of origin/%s: %w", defaultBranch, err)
 	}
@@ -262,7 +317,7 @@ func execute(ctx context.Context, cfg *Config) error {
 
 	var updates []flakeInputUpdate
 	if count > 0 {
-		updates = collectFlakeLockUpdates(ctx, env, defaultBranch)
+		updates = collectFlakeLockUpdates(ctx, runner, env, defaultBranch)
 	}
 
 	body, err := buildPRBody(cfg.PRBody, updates, workflowmeta.Get(), os.Getenv("GITHUB_ACTIONS") == "true")
@@ -275,28 +330,31 @@ func execute(ctx context.Context, cfg *Config) error {
 		return nil
 	}
 
-	outgoingDiff, err := runCmdOutput(ctx, env, "git", "diff", fmt.Sprintf("origin/%s..", defaultBranch))
+	outgoingDiff, err := runner.Output(ctx, env, "git", "diff", fmt.Sprintf("origin/%s..", defaultBranch))
 	if err != nil {
 		return fmt.Errorf("failed to get outgoing diff: %w", err)
 	}
+	outgoingLog, err := runner.Output(ctx, env, "git", "log", "--format=%B", fmt.Sprintf("origin/%s..", defaultBranch))
+	if err != nil {
+		return fmt.Errorf("failed to get outgoing commit messages: %w", err)
+	}
 
-	checker := &leakcheck.BetterleaksChecker{}
-	if err := leakcheck.CheckMultiple(ctx, checker, cfg.PRTitle, body, outgoingDiff); err != nil {
+	if err := leakcheck.CheckMultiple(ctx, checker, cfg.PRTitle, body, outgoingLog, outgoingDiff); err != nil {
 		return fmt.Errorf("pre-flight leak check failed for pull request payload: %w", err)
 	}
 
 	fmt.Printf("Found %d commit(s).\n", count)
 	// Configure git credentials only after post-command and leak checks finish,
 	// so untrusted code in post-command cannot read tokens from .git/config.
-	if err := runCmd(ctx, env, "gh", "auth", "setup-git"); err != nil {
+	if err := runner.Run(ctx, env, "gh", "auth", "setup-git"); err != nil {
 		return fmt.Errorf("failed to configure git authentication: %w", err)
 	}
 	fmt.Printf("Pushing to %s...\n", cfg.BranchName)
-	if err := runCmd(ctx, env, "git", "push", "origin", cfg.BranchName, "--force"); err != nil {
+	if err := runner.Run(ctx, env, "git", "push", "origin", cfg.BranchName, "--force"); err != nil {
 		return fmt.Errorf("failed to push to %s: %w", cfg.BranchName, err)
 	}
 
-	prState, _ := runCmdOutput(ctx, env, "gh", "pr", "view", cfg.BranchName, "--json", "state", "--jq", ".state")
+	prState, _ := runner.Output(ctx, env, "gh", "pr", "view", cfg.BranchName, "--json", "state", "--jq", ".state")
 	if strings.TrimSpace(prState) != "OPEN" {
 		createArgs := []string{
 			"pr", "create",
@@ -305,7 +363,7 @@ func execute(ctx context.Context, cfg *Config) error {
 			"--title", cfg.PRTitle,
 			"--body", body,
 		}
-		if err := runCmd(ctx, env, "gh", createArgs...); err != nil {
+		if err := runner.Run(ctx, env, "gh", createArgs...); err != nil {
 			return fmt.Errorf("failed to create PR: %w", err)
 		}
 	} else {
@@ -313,7 +371,7 @@ func execute(ctx context.Context, cfg *Config) error {
 			"pr", "edit", cfg.BranchName,
 			"--body", body,
 		}
-		if err := runCmd(ctx, env, "gh", editArgs...); err != nil {
+		if err := runner.Run(ctx, env, "gh", editArgs...); err != nil {
 			return fmt.Errorf("failed to update PR description: %w", err)
 		}
 	}

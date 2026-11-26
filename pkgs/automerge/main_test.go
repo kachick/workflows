@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kachick/workflows/internal/leakcheck"
 	"github.com/kachick/workflows/internal/workflowmeta"
 )
 
@@ -48,11 +49,13 @@ func TestParseConfigDefaults(t *testing.T) {
 }
 
 func TestParseConfigFlags(t *testing.T) {
+	t.Setenv("OSV_SCANNER", "false")
+	t.Setenv("MERGE_METHOD", "merge")
 	args := []string{
 		"--merge-method=rebase",
 		"--allowed-bots=custom-bot,another-bot",
 		"--llm-veto=true",
-		"--gemini-api-key=test-key",
+		"--osv-scanner=true",
 		"--gemini-model=custom-model",
 		"--reviewer=custom-reviewer",
 	}
@@ -72,8 +75,8 @@ func TestParseConfigFlags(t *testing.T) {
 	if !cfg.LLMVeto {
 		t.Errorf("expected llm-veto true, got %v", cfg.LLMVeto)
 	}
-	if cfg.GeminiAPIKey != "test-key" {
-		t.Errorf("expected gemini-api-key 'test-key', got %q", cfg.GeminiAPIKey)
+	if !cfg.OSVScanner {
+		t.Errorf("expected explicit --osv-scanner=true to override OSV_SCANNER=false")
 	}
 	if cfg.GeminiModel != "custom-model" {
 		t.Errorf("expected gemini-model 'custom-model', got %q", cfg.GeminiModel)
@@ -83,11 +86,24 @@ func TestParseConfigFlags(t *testing.T) {
 	}
 }
 
-func TestParseConfigInvalidMethod(t *testing.T) {
-	_, err := parseConfig([]string{"--merge-method=invalid"})
-	if err == nil {
-		t.Errorf("expected error for invalid merge-method, got nil")
-	}
+func TestParseConfigInvalidValues(t *testing.T) {
+	t.Run("invalid merge-method", func(t *testing.T) {
+		if _, err := parseConfig([]string{"--merge-method=invalid"}); err == nil {
+			t.Errorf("expected error for invalid merge-method, got nil")
+		}
+	})
+	t.Run("invalid LLM_VETO env", func(t *testing.T) {
+		t.Setenv("LLM_VETO", "yes")
+		if _, err := parseConfig(nil); err == nil {
+			t.Errorf("expected error for invalid LLM_VETO, got nil")
+		}
+	})
+	t.Run("invalid OSV_SCANNER env", func(t *testing.T) {
+		t.Setenv("OSV_SCANNER", "not-a-bool")
+		if _, err := parseConfig(nil); err == nil {
+			t.Errorf("expected error for invalid OSV_SCANNER, got nil")
+		}
+	})
 }
 
 func TestParseConfigEnvFallback(t *testing.T) {
@@ -142,349 +158,7 @@ func TestParseAllowedBots(t *testing.T) {
 	}
 }
 
-func TestIsDisallowedDependabotMajor(t *testing.T) {
-	tests := []struct {
-		title      string
-		disallowed bool
-	}{
-		{title: "Bump actions/checkout from 4.0.0 to 4.1.0", disallowed: false},
-		{title: "Bump actions/checkout from v4.0.0 to v4.0.1", disallowed: false},
-		{title: "Bump actions/checkout from 3.0.0 to 4.0.0", disallowed: true},
-		{title: "Bump actions/checkout from v3.0.0 to v4.0.0", disallowed: true},
-		{title: "Bump actions/checkout from 4.0.0 to 4.1.0 in /.github/workflows", disallowed: false},
-		{title: "Bump actions/checkout from 3.0.0 to 4.0.0 in /.github/workflows", disallowed: true},
-		{title: "Bump cachix/cachix-action from 14 to 15", disallowed: true},
-		{title: "Bump cachix/install-nix-action from v26 to v27", disallowed: true},
-		{title: "Bump the rust group with 2 updates", disallowed: true},
-		{title: "Bump the dev-dependencies group in /sub/dir with 3 updates", disallowed: true},
-		{title: "Bump foo from 0.1.0 to 0.2.0", disallowed: false},
-		{title: "Bump foo from 0.1.0 to 0.1.1", disallowed: false},
-		{title: "Bump foo from v0.1.0 to v0.2.0", disallowed: false},
-		{title: "Bump foo from v0.1.0 to v0.1.1", disallowed: false},
-		{title: "Bump foo from 0.1 to 0.2", disallowed: false},
-		{title: "Bump foo from 0.1 to 0.1.1", disallowed: false},
-		{title: "Bump foo from 0.9.0 to 1.0.0", disallowed: false},
-		{title: "Bump foo from 0.1.0 to 2.0.0", disallowed: true},
-		{title: "Bump golang.org/x/sys from 0.48.0 to 0.49.0", disallowed: false},
-		{title: "Update dependencies", disallowed: true},
-	}
-
-	for _, tc := range tests {
-		got := isDisallowedDependabotMajor(tc.title)
-		if got != tc.disallowed {
-			t.Errorf("isDisallowedDependabotMajor(%q) = %v, want %v", tc.title, got, tc.disallowed)
-		}
-	}
-}
-
 const validRenovateBody = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [foo](https://example.com) | minor | `1.0.0` -> `1.1.0` |\n"
-
-func TestIsEligible(t *testing.T) {
-	validChecks := []StatusCheckItem{
-		{Status: "COMPLETED", Conclusion: "SUCCESS"},
-		{Status: "COMPLETED", Conclusion: "SUCCESS"},
-	}
-
-	basePR := PullRequest{
-		Number:            1,
-		Title:             "Update dependency",
-		Body:              validRenovateBody,
-		Author:            Author{Login: "app/renovate"},
-		IsDraft:           false,
-		Mergeable:         "MERGEABLE",
-		StatusCheckRollup: validChecks,
-	}
-
-	if !isEligible(basePR, defaultAllowedBots, "") {
-		t.Errorf("expected basePR to be eligible")
-	}
-
-	// Not allowed author
-	unallowedAuthor := basePR
-	unallowedAuthor.Author.Login = "attacker[bot]"
-	if isEligible(unallowedAuthor, defaultAllowedBots, "") {
-		t.Errorf("unallowed author should not be eligible")
-	}
-
-	// Bot accounts formatted with [bot] instead of app/ must be rejected (fail-closed)
-	botFormatPR := basePR
-	botFormatPR.Author.Login = "dependabot[bot]"
-	if isEligible(botFormatPR, defaultAllowedBots, "") {
-		t.Errorf("author formatted with [bot] should not match app/ allowlist")
-	}
-
-	// Draft PR
-	draftPR := basePR
-	draftPR.IsDraft = true
-	if isEligible(draftPR, defaultAllowedBots, "") {
-		t.Errorf("draft PR should not be eligible")
-	}
-
-	// Not mergeable
-	conflictPR := basePR
-	conflictPR.Mergeable = "CONFLICTING"
-	if isEligible(conflictPR, defaultAllowedBots, "") {
-		t.Errorf("conflicting PR should not be eligible")
-	}
-
-	// Empty checks
-	noChecksPR := basePR
-	noChecksPR.StatusCheckRollup = []StatusCheckItem{}
-	if isEligible(noChecksPR, defaultAllowedBots, "") {
-		t.Errorf("PR without checks should not be eligible")
-	}
-
-	// In-progress checks
-	inProgressPR := basePR
-	inProgressPR.StatusCheckRollup = []StatusCheckItem{
-		{Status: "IN_PROGRESS", Conclusion: ""},
-	}
-	if isEligible(inProgressPR, defaultAllowedBots, "") {
-		t.Errorf("PR with in-progress checks should not be eligible")
-	}
-
-	// Failed checks
-	failedPR := basePR
-	failedPR.StatusCheckRollup = []StatusCheckItem{
-		{Status: "COMPLETED", Conclusion: "FAILURE"},
-	}
-	if isEligible(failedPR, defaultAllowedBots, "") {
-		t.Errorf("PR with failed checks should not be eligible")
-	}
-
-	// Skipped checks (eligible)
-	skippedPR := basePR
-	skippedPR.StatusCheckRollup = []StatusCheckItem{
-		{Status: "COMPLETED", Conclusion: "SKIPPED"},
-	}
-	if !isEligible(skippedPR, defaultAllowedBots, "") {
-		t.Errorf("PR with skipped checks should be eligible")
-	}
-
-	// Neutral checks (eligible)
-	neutralPR := basePR
-	neutralPR.StatusCheckRollup = []StatusCheckItem{
-		{Status: "COMPLETED", Conclusion: "NEUTRAL"},
-	}
-	if !isEligible(neutralPR, defaultAllowedBots, "") {
-		t.Errorf("PR with neutral checks should be eligible")
-	}
-
-	// Timed out checks
-	timedOutPR := basePR
-	timedOutPR.StatusCheckRollup = []StatusCheckItem{
-		{Status: "COMPLETED", Conclusion: "TIMED_OUT"},
-	}
-	if isEligible(timedOutPR, defaultAllowedBots, "") {
-		t.Errorf("PR with timed out checks should not be eligible")
-	}
-
-	// Cancelled checks
-	cancelledPR := basePR
-	cancelledPR.StatusCheckRollup = []StatusCheckItem{
-		{Status: "COMPLETED", Conclusion: "CANCELLED"},
-	}
-	if isEligible(cancelledPR, defaultAllowedBots, "") {
-		t.Errorf("PR with cancelled checks should not be eligible")
-	}
-
-	// StatusContext checks
-	statusContextSuccessPR := basePR
-	statusContextSuccessPR.StatusCheckRollup = []StatusCheckItem{
-		{TypeName: "StatusContext", State: "SUCCESS"},
-	}
-	if !isEligible(statusContextSuccessPR, defaultAllowedBots, "") {
-		t.Errorf("PR with successful status context should be eligible")
-	}
-
-	statusContextPendingPR := basePR
-	statusContextPendingPR.StatusCheckRollup = []StatusCheckItem{
-		{TypeName: "StatusContext", State: "PENDING"},
-	}
-	if isEligible(statusContextPendingPR, defaultAllowedBots, "") {
-		t.Errorf("PR with pending status context should not be eligible")
-	}
-
-	statusContextFailedPR := basePR
-	statusContextFailedPR.StatusCheckRollup = []StatusCheckItem{
-		{TypeName: "StatusContext", State: "FAILURE"},
-	}
-	if isEligible(statusContextFailedPR, defaultAllowedBots, "") {
-		t.Errorf("PR with failed status context should not be eligible")
-	}
-
-	mixedChecksSuccessPR := basePR
-	mixedChecksSuccessPR.StatusCheckRollup = []StatusCheckItem{
-		{TypeName: "CheckRun", Status: "COMPLETED", Conclusion: "SUCCESS"},
-		{TypeName: "StatusContext", State: "SUCCESS"},
-	}
-	if !isEligible(mixedChecksSuccessPR, defaultAllowedBots, "") {
-		t.Errorf("PR with mixed check run and status context should be eligible")
-	}
-
-	// Dependabot major bump (disallowed)
-	dependabotMajorPR := basePR
-	dependabotMajorPR.Author.Login = "app/dependabot"
-	dependabotMajorPR.Title = "Bump actions/checkout from 3.0.0 to 4.0.0"
-	if isEligible(dependabotMajorPR, defaultAllowedBots, "") {
-		t.Errorf("Dependabot major bump should not be eligible")
-	}
-
-	// Dependabot minor bump (eligible)
-	dependabotMinorPR := basePR
-	dependabotMinorPR.Author.Login = "app/dependabot"
-	dependabotMinorPR.Title = "Bump actions/checkout from 4.0.0 to 4.1.0"
-	if !isEligible(dependabotMinorPR, defaultAllowedBots, "") {
-		t.Errorf("Dependabot minor bump should be eligible")
-	}
-
-	// Dependabot subdirectory minor bump (eligible)
-	dependabotSubdirMinorPR := basePR
-	dependabotSubdirMinorPR.Author.Login = "app/dependabot"
-	dependabotSubdirMinorPR.Title = "Bump actions/checkout from 4.0.0 to 4.1.0 in /.github/workflows"
-	if !isEligible(dependabotSubdirMinorPR, defaultAllowedBots, "") {
-		t.Errorf("Dependabot subdirectory minor bump should be eligible")
-	}
-
-	// Dependabot subdirectory major bump (disallowed)
-	dependabotSubdirMajorPR := basePR
-	dependabotSubdirMajorPR.Author.Login = "app/dependabot"
-	dependabotSubdirMajorPR.Title = "Bump actions/checkout from 3.0.0 to 4.0.0 in /.github/workflows"
-	if isEligible(dependabotSubdirMajorPR, defaultAllowedBots, "") {
-		t.Errorf("Dependabot subdirectory major bump should not be eligible")
-	}
-
-	// Dependabot group update (disallowed)
-	dependabotGroupPR := basePR
-	dependabotGroupPR.Author.Login = "app/dependabot"
-	dependabotGroupPR.Title = "Bump the rust group with 2 updates"
-	if isEligible(dependabotGroupPR, defaultAllowedBots, "") {
-		t.Errorf("Dependabot group update should not be eligible")
-	}
-
-	// Dependabot cachix major bump (disallowed)
-	dependabotCachixPR := basePR
-	dependabotCachixPR.Author.Login = "app/dependabot"
-	dependabotCachixPR.Title = "Bump cachix/cachix-action from 14 to 15"
-	if isEligible(dependabotCachixPR, defaultAllowedBots, "") {
-		t.Errorf("Dependabot cachix major bump should not be eligible")
-	}
-
-	// Renovate major bump (disallowed)
-	renovateMajorPR := basePR
-	renovateMajorPR.Author.Login = "app/renovate"
-	renovateMajorPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [actions/checkout](https://example.com) | major | `3.0.0` -> `4.0.0` |\n"
-	if isEligible(renovateMajorPR, defaultAllowedBots, "") {
-		t.Errorf("Renovate major bump should not be eligible")
-	}
-
-	// Renovate 0.x minor bump (eligible)
-	renovate0xPR := basePR
-	renovate0xPR.Author.Login = "app/renovate"
-	renovate0xPR.Body = "This PR contains the following updates:\n\n| Package | Update | Change |\n|---|---|---|\n| [dprint/dprint-plugin-markdown](https://example.com) | minor | `0.24.0` → `0.26.0` |\n"
-	if !isEligible(renovate0xPR, defaultAllowedBots, "") {
-		t.Errorf("Renovate 0.x bump should be eligible")
-	}
-
-	// Renovate unrecognized body (disallowed)
-	renovateInvalidBodyPR := basePR
-	renovateInvalidBodyPR.Author.Login = "app/renovate"
-	renovateInvalidBodyPR.Body = "Unrecognized body without table"
-	if isEligible(renovateInvalidBodyPR, defaultAllowedBots, "") {
-		t.Errorf("Renovate unrecognized body should not be eligible")
-	}
-
-	// Copilot agent PR without review approval (ineligible)
-	copilotUnapprovedPR := basePR
-	copilotUnapprovedPR.Author.Login = "app/copilot-swe-agent"
-	copilotUnapprovedPR.Title = "Update dprint plugins"
-	if isEligible(copilotUnapprovedPR, defaultAllowedBots, "kachick") {
-		t.Errorf("Copilot PR without review approval should not be eligible")
-	}
-
-	// Copilot agent PR with non-maintainer approval (ineligible)
-	copilotExternalApprovedPR := copilotUnapprovedPR
-	copilotExternalApprovedPR.LatestReviews = []Review{
-		{
-			Author:            Author{Login: "external-user"},
-			AuthorAssociation: "NONE",
-			State:             "APPROVED",
-		},
-	}
-	if isEligible(copilotExternalApprovedPR, defaultAllowedBots, "kachick") {
-		t.Errorf("Copilot PR with external approval should not be eligible")
-	}
-
-	// Copilot agent PR with changes requested (ineligible)
-	copilotChangesRequestedPR := copilotUnapprovedPR
-	copilotChangesRequestedPR.LatestReviews = []Review{
-		{
-			Author:            Author{Login: "kachick"},
-			AuthorAssociation: "OWNER",
-			State:             "CHANGES_REQUESTED",
-		},
-	}
-	if isEligible(copilotChangesRequestedPR, defaultAllowedBots, "kachick") {
-		t.Errorf("Copilot PR with changes requested should not be eligible")
-	}
-
-	// Copilot agent PR with OWNER approval (eligible)
-	copilotOwnerApprovedPR := copilotUnapprovedPR
-	copilotOwnerApprovedPR.LatestReviews = []Review{
-		{
-			Author:            Author{Login: "owner-user"},
-			AuthorAssociation: "OWNER",
-			State:             "APPROVED",
-		},
-	}
-	if !isEligible(copilotOwnerApprovedPR, defaultAllowedBots, "") {
-		t.Errorf("Copilot PR with OWNER approval should be eligible")
-	}
-
-	// Copilot agent PR with configured reviewer approval (eligible)
-	copilotReviewerApprovedPR := copilotUnapprovedPR
-	copilotReviewerApprovedPR.LatestReviews = []Review{
-		{
-			Author:            Author{Login: "kachick"},
-			AuthorAssociation: "CONTRIBUTOR",
-			State:             "APPROVED",
-		},
-	}
-	if !isEligible(copilotReviewerApprovedPR, defaultAllowedBots, "kachick") {
-		t.Errorf("Copilot PR with reviewer approval should be eligible")
-	}
-}
-
-func TestStatusCheckRollupUnmarshal(t *testing.T) {
-	rawJSON := `[
-		{
-			"__typename": "CheckRun",
-			"name": "Check",
-			"status": "COMPLETED",
-			"conclusion": "SUCCESS"
-		},
-		{
-			"__typename": "StatusContext",
-			"context": "renovate/stability-days",
-			"state": "SUCCESS"
-		}
-	]`
-
-	var checks []StatusCheckItem
-	if err := json.Unmarshal([]byte(rawJSON), &checks); err != nil {
-		t.Fatalf("unexpected unmarshal error: %v", err)
-	}
-
-	if len(checks) != 2 {
-		t.Fatalf("expected 2 checks, got %d", len(checks))
-	}
-	if checks[0].TypeName != "CheckRun" || checks[0].Status != "COMPLETED" || checks[0].Conclusion != "SUCCESS" {
-		t.Errorf("unexpected check run: %+v", checks[0])
-	}
-	if checks[1].TypeName != "StatusContext" || checks[1].State != "SUCCESS" {
-		t.Errorf("unexpected status context: %+v", checks[1])
-	}
-}
 
 type mockRunner struct {
 	prs                  []PullRequest
@@ -601,6 +275,11 @@ func (m *mockRunner) RequestReviewer(ctx context.Context, number int, reviewer s
 	}
 	m.requestedReviewers[number] = append(m.requestedReviewers[number], reviewer)
 	return nil
+}
+
+type vetoDecision struct {
+	Veto   bool
+	Reason string
 }
 
 type mockReviewer struct {
@@ -1477,6 +1156,58 @@ func TestCheckEligibility(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("accepts SKIPPED, NEUTRAL, and StatusContext SUCCESS", func(t *testing.T) {
+		for _, checks := range [][]StatusCheckItem{
+			{{Status: "COMPLETED", Conclusion: "SKIPPED"}},
+			{{Status: "COMPLETED", Conclusion: "NEUTRAL"}},
+			{{TypeName: "StatusContext", State: "SUCCESS"}},
+		} {
+			pr := basePR
+			pr.StatusCheckRollup = checks
+			if res := checkEligibility(pr, defaultAllowedBots, "kachick", meta); !res.Eligible {
+				t.Errorf("expected eligible for checks %+v, got reason=%q", checks, res.Reason)
+			}
+		}
+	})
+
+	t.Run("rejects EXPECTED status context, TIMED_OUT/CANCELLED/ACTION_REQUIRED checks, and [bot] login format", func(t *testing.T) {
+		cases := []func(pr *PullRequest){
+			func(pr *PullRequest) { pr.Author.Login = "dependabot[bot]" },
+			func(pr *PullRequest) {
+				pr.StatusCheckRollup = []StatusCheckItem{{TypeName: "StatusContext", State: "EXPECTED"}}
+			},
+			func(pr *PullRequest) {
+				pr.StatusCheckRollup = []StatusCheckItem{{Status: "COMPLETED", Conclusion: "TIMED_OUT"}}
+			},
+			func(pr *PullRequest) {
+				pr.StatusCheckRollup = []StatusCheckItem{{Status: "COMPLETED", Conclusion: "CANCELLED"}}
+			},
+			func(pr *PullRequest) {
+				pr.StatusCheckRollup = []StatusCheckItem{{Status: "COMPLETED", Conclusion: "ACTION_REQUIRED"}}
+			},
+		}
+		for _, mod := range cases {
+			pr := basePR
+			mod(&pr)
+			if res := checkEligibility(pr, defaultAllowedBots, "kachick", meta); res.Eligible {
+				t.Errorf("expected ineligible PR for %+v", pr)
+			}
+		}
+	})
+
+	t.Run("Copilot agent requires maintainer approval (case-insensitive login)", func(t *testing.T) {
+		pr := basePR
+		pr.Author.Login = "app/Copilot-SWE-Agent"
+		allowed := append([]string{"app/Copilot-SWE-Agent"}, defaultAllowedBots...)
+		if res := checkEligibility(pr, allowed, "kachick", meta); res.Eligible || res.Source != SourceReview {
+			t.Fatalf("expected ineligible with SourceReview, got %+v", res)
+		}
+		pr.LatestReviews = []Review{{Author: Author{Login: "kachick"}, AuthorAssociation: "OWNER", State: "APPROVED"}}
+		if res := checkEligibility(pr, allowed, "kachick", meta); !res.Eligible {
+			t.Fatalf("expected eligible after OWNER approval, got %+v", res)
+		}
+	})
 }
 
 func TestCheckRenovateBump(t *testing.T) {
@@ -1666,7 +1397,7 @@ func TestExtractBaseTreeAndApplyPatch(t *testing.T) {
 		t.Fatalf("git commit failed (%v): %s", err, string(out))
 	}
 
-	if err := extractBaseTree(ctx, repoDir, destDir); err != nil {
+	if err := extractBaseTree(ctx, repoDir, "HEAD", destDir); err != nil {
 		t.Fatalf("extractBaseTree() failed: %v", err)
 	}
 
@@ -2199,26 +1930,6 @@ func TestFormatEvaluationSteps(t *testing.T) {
 	}
 }
 
-func TestFormatEvaluationStepsWithNeutral(t *testing.T) {
-	steps := []EvaluationStep{
-		{Name: "Author is in allowed bots", Status: StepPassed, Details: "@samuebot[bot]"},
-		{Name: "PR is not a draft", Status: StepPassed},
-		{Name: "PR has no veto or block labels", Status: StepPassed},
-		{Name: "GitHub mergeable state is clean", Status: StepPassed, Details: "MERGEABLE"},
-		{Name: "All status checks completed successfully", Status: StepPassed, Details: "4/4 checks passed"},
-		{Name: "Version bump policy", Status: StepPassed, Details: "non-breaking update"},
-		{Name: "Vulnerability scan (OSV-Scanner)", Status: StepNeutral, Details: "skipped (no supported lockfiles found)"},
-		{Name: "LLM veto", Status: StepPassed, Details: "no risks detected"},
-		{Name: "Merge PR", Status: StepPassed, Details: "squash"},
-	}
-
-	formatted := formatEvaluationSteps(steps)
-	expectedLine := "- :heavy_minus_sign: Vulnerability scan (OSV-Scanner): skipped (no supported lockfiles found)"
-	if !strings.Contains(formatted, expectedLine) {
-		t.Errorf("formatEvaluationSteps() missing expected neutral line %q, got:\n%s", expectedLine, formatted)
-	}
-}
-
 func TestDiffTouchesFlakeLock(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -2401,6 +2112,114 @@ func TestShouldRetryMergeable(t *testing.T) {
 	}
 }
 
+func TestCheckVersionBumpFailClosed(t *testing.T) {
+	cases := []struct {
+		oldVer     string
+		newVer     string
+		disallowed bool
+	}{
+		{">=1.0.0 <2.0.0", ">=1.0.0 <3.0.0", true},
+		{"1.x || 2.x", "1.x || 3.x", true},
+		{"", "v", true},
+		{"abc", "abc", true},
+		{"1.0.0", "1.2.3", false},
+		{"0.4.0", "1.0.0", false},
+		{"0.4.0", "2.0.0", true},
+	}
+	for _, tc := range cases {
+		got, _ := checkVersionBump(tc.oldVer, tc.newVer)
+		if got != tc.disallowed {
+			t.Errorf("checkVersionBump(%q, %q) = %v, want %v", tc.oldVer, tc.newVer, got, tc.disallowed)
+		}
+	}
+}
+
+func TestCleanDependabotBodyNestedDetails(t *testing.T) {
+	body := "Updates `foo` from 1.0.0 to 1.1.0\n<details><summary>Outer</summary><details><summary>Inner</summary>Updates `bar` from 1.0.0 to 2.0.0</details>Updates `baz` from 1.0.0 to 3.0.0</details>\n"
+	cleaned := cleanDependabotBody(body)
+	if strings.Contains(cleaned, "bar") || strings.Contains(cleaned, "baz") {
+		t.Fatalf("nested <details> content leaked: %q", cleaned)
+	}
+	if !strings.Contains(cleaned, "Updates `foo`") {
+		t.Fatalf("outer update line lost: %q", cleaned)
+	}
+}
+
+func TestEvaluateGeminiReportFailClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		report   geminiReviewReport
+		wantVeto bool
+	}{
+		{"empty risk_level vetoes", geminiReviewReport{RiskLevel: "", Summary: "ok"}, true},
+		{"unrecognized risk_level vetoes", geminiReviewReport{RiskLevel: "SEVERE", Summary: "bad"}, true},
+		{"unrecognized finding severity vetoes", geminiReviewReport{RiskLevel: "LOW", Findings: []geminiFinding{{Severity: "EXTREME", Category: "sec", Description: "d"}}}, true},
+		{"LOW risk passes", geminiReviewReport{RiskLevel: "LOW", Summary: "safe"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			veto, _ := evaluateGeminiReport(tc.report)
+			if veto != tc.wantVeto {
+				t.Errorf("evaluateGeminiReport(%+v) = %v, want %v", tc.report, veto, tc.wantVeto)
+			}
+		})
+	}
+}
+
+func TestRetryMergeablePreservesResultOnFetchError(t *testing.T) {
+	origInterval := mergeableRetryInterval
+	mergeableRetryInterval = time.Millisecond
+	t.Cleanup(func() { mergeableRetryInterval = origInterval })
+
+	pr := PullRequest{
+		Number:    99,
+		Title:     "Bump foo",
+		Body:      validRenovateBody,
+		Author:    Author{Login: "app/renovate"},
+		Mergeable: "UNKNOWN",
+	}
+	runner := &mockRunner{
+		fetchPRErrOn: map[int]error{99: errors.New("api timeout")},
+	}
+	_, res := retryMergeable(context.Background(), runner, pr, defaultAllowedBots, "", workflowmeta.Metadata{})
+	if res.Source != SourceMergeable || res.Reason == "" {
+		t.Fatalf("expected SourceMergeable with reason on FetchPR error, got %+v", res)
+	}
+}
+
+func TestDiffScanResultsTracksPackageAndID(t *testing.T) {
+	base := &scanResult{
+		findings: []scanFinding{{ID: "CVE-2026-0001", Package: "pkg-a", Version: "1.0.0"}},
+	}
+	pr := &scanResult{
+		findings: []scanFinding{
+			{ID: "CVE-2026-0001", Package: "pkg-a", Version: "1.0.0"},
+			{ID: "CVE-2026-0001", Package: "pkg-b", Version: "2.0.0"},
+		},
+	}
+	got := diffScanResults(base, pr)
+	if len(got) != 1 || got[0] != "CVE-2026-0001 (pkg-b@2.0.0)" {
+		t.Fatalf("expected new vulnerability in pkg-b, got %v", got)
+	}
+}
+
+type failingLeakChecker struct{}
+
+func (failingLeakChecker) Check(_ context.Context, _ string) error {
+	return leakcheck.ErrLeakDetected
+}
+
+func TestPostRequestChangesSafeBlocksSecret(t *testing.T) {
+	orig := outputLeakChecker
+	outputLeakChecker = failingLeakChecker{}
+	t.Cleanup(func() { outputLeakChecker = orig })
+
+	runner := &mockRunner{}
+	postRequestChangesSafe(context.Background(), runner, 1, "secret payload")
+	if len(runner.requestedChanges[1]) != 0 {
+		t.Fatalf("expected RequestChangesPR to be blocked when leakcheck fails")
+	}
+}
+
 func TestExecuteRetriesUnknownMergeable(t *testing.T) {
 	origInterval := mergeableRetryInterval
 	mergeableRetryInterval = time.Millisecond
@@ -2580,8 +2399,8 @@ func TestScanDirectoryWithoutLockfiles(t *testing.T) {
 	if res.sourceCount != 0 {
 		t.Errorf("expected 0 sources scanned, got %d", res.sourceCount)
 	}
-	if len(res.ids) != 0 {
-		t.Errorf("expected 0 vulnerability IDs, got %v", res.ids)
+	if len(res.findings) != 0 {
+		t.Errorf("expected 0 vulnerability findings, got %v", res.findings)
 	}
 }
 
@@ -2603,7 +2422,7 @@ func TestScanDirectoryWithCleanLockfile(t *testing.T) {
 	if res.sourceCount != 1 {
 		t.Errorf("expected 1 source scanned, got %d", res.sourceCount)
 	}
-	if len(res.ids) != 0 {
-		t.Errorf("expected 0 vulnerability IDs, got %v", res.ids)
+	if len(res.findings) != 0 {
+		t.Errorf("expected 0 vulnerability findings, got %v", res.findings)
 	}
 }

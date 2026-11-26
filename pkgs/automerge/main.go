@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kachick/workflows/internal/leakcheck"
 	"github.com/kachick/workflows/internal/workflowmeta"
 )
 
@@ -37,7 +38,8 @@ var (
 	dependabotBumpTitleRegex   = regexp.MustCompile(`^(?:(?i:build|chore|fix|ci)(?:\([^)]+\))?:\s*)?(?:Bump|Update)\s+(?P<pkg>.+?)(?:\s+requirement)?\s+from\s+(?P<old>[^ ]+)\s+to\s+(?P<new>[^ ]+)(?:\s+in\s+.+)?$`)
 	dependabotBodyUpdateRegex  = regexp.MustCompile(`(?m)^\s*(?:Updates?|Updated|Bumps?|Bumped)\s+(?:` + "`(?P<pkg1>[^`]+)`" + `|\[(?P<pkg2>[^\]]+)\]\([^)]+\)|(?P<pkg3>[^ \n]+))\s+from\s+(?P<old>[^ \n]+)\s+to\s+(?P<new>[^ \n]+)`)
 	dependabotGroupHeaderRegex = regexp.MustCompile(`(?i)\bwith\s+(\d+)\s+updates?\b`)
-	detailsTagRegex            = regexp.MustCompile(`(?s)<details\b[^>]*>.*?</details>`)
+	detailsTagTokenRegex       = regexp.MustCompile(`(?i)<details\b[^>]*>|</details>`)
+	tableDelimiterRegex        = regexp.MustCompile(`^\|[\s:|-]+\|$`)
 	renovateTableRowRegex      = regexp.MustCompile(`(?m)^\|\s*(?:\[(?P<pkg>[^\]]+)\]\([^)]+\)[^|]*|(?P<rawpkg>[^|]+?))\s*\|(?:[^|\n]*\|)*?\s*(?:(?P<update>[a-zA-Z]+)\s*\|\s*)?[^|\n]*?(?:` + "`(?P<old>[^`]*)`" + `)?\s*(?:→|->)\s*` + "`(?P<new>[^`]+)`")
 	hexDigestRegex             = regexp.MustCompile(`^(?:sha256:)?[0-9a-f]{7,64}$`)
 )
@@ -179,6 +181,7 @@ type DefaultCommandRunner struct{}
 func (r *DefaultCommandRunner) FetchOpenPRs(ctx context.Context) ([]PullRequest, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"--state", "open",
+		"--limit", "100",
 		"--json", "number,title,body,author,isDraft,mergeable,statusCheckRollup,labels,baseRefName,latestReviews",
 	)
 	var stdout bytes.Buffer
@@ -321,7 +324,6 @@ func parseConfig(args []string) (*Config, error) {
 	fs.StringVar(&allowedBotsRaw, "allowed-bots", "", "Comma-separated list of allowed bot logins")
 	fs.StringVar(&cfg.MergeMethod, "merge-method", "squash", "Merge method (squash, merge, or rebase)")
 	fs.BoolVar(&cfg.LLMVeto, "llm-veto", false, "Enable LLM veto review before merging")
-	fs.StringVar(&cfg.GeminiAPIKey, "gemini-api-key", "", "Gemini API key for LLM veto")
 	fs.StringVar(&cfg.GeminiModel, "gemini-model", "gemini-flash-latest", "Gemini model name for LLM veto")
 	fs.BoolVar(&cfg.OSVScanner, "osv-scanner", true, "Enable OSV-Scanner diff check before merging")
 	fs.StringVar(&cfg.Reviewer, "reviewer", "", "GitHub login to request review on veto or block")
@@ -330,30 +332,50 @@ func parseConfig(args []string) (*Config, error) {
 		return nil, err
 	}
 
-	if env := os.Getenv("ALLOWED_BOTS"); env != "" && allowedBotsRaw == "" {
-		allowedBotsRaw = env
+	explicit := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) {
+		explicit[f.Name] = true
+	})
+
+	if !explicit["allowed-bots"] {
+		if env := os.Getenv("ALLOWED_BOTS"); env != "" {
+			allowedBotsRaw = env
+		}
 	}
-	if env := os.Getenv("MERGE_METHOD"); env != "" && cfg.MergeMethod == "squash" {
-		cfg.MergeMethod = env
+	if !explicit["merge-method"] {
+		if env := os.Getenv("MERGE_METHOD"); env != "" {
+			cfg.MergeMethod = env
+		}
 	}
-	if env := os.Getenv("LLM_VETO"); env != "" && !cfg.LLMVeto {
-		if val, err := strconv.ParseBool(env); err == nil {
+	if !explicit["llm-veto"] {
+		if env := strings.TrimSpace(os.Getenv("LLM_VETO")); env != "" {
+			val, err := strconv.ParseBool(env)
+			if err != nil {
+				return nil, fmt.Errorf("invalid LLM_VETO %q: %w", env, err)
+			}
 			cfg.LLMVeto = val
 		}
 	}
-	if env := os.Getenv("GEMINI_API_KEY"); env != "" && cfg.GeminiAPIKey == "" {
-		cfg.GeminiAPIKey = env
+	// Read GEMINI_API_KEY only from environment variables so secrets never appear in CLI arguments.
+	cfg.GeminiAPIKey = os.Getenv("GEMINI_API_KEY")
+	if !explicit["gemini-model"] {
+		if env := os.Getenv("GEMINI_MODEL"); env != "" {
+			cfg.GeminiModel = env
+		}
 	}
-	if env := os.Getenv("GEMINI_MODEL"); env != "" && cfg.GeminiModel == "gemini-flash-latest" {
-		cfg.GeminiModel = env
-	}
-	if env := os.Getenv("OSV_SCANNER"); env != "" {
-		if val, err := strconv.ParseBool(env); err == nil {
+	if !explicit["osv-scanner"] {
+		if env := strings.TrimSpace(os.Getenv("OSV_SCANNER")); env != "" {
+			val, err := strconv.ParseBool(env)
+			if err != nil {
+				return nil, fmt.Errorf("invalid OSV_SCANNER %q: %w", env, err)
+			}
 			cfg.OSVScanner = val
 		}
 	}
-	if env := os.Getenv("REVIEWER"); env != "" && cfg.Reviewer == "" {
-		cfg.Reviewer = env
+	if !explicit["reviewer"] {
+		if env := os.Getenv("REVIEWER"); env != "" {
+			cfg.Reviewer = env
+		}
 	}
 
 	validMethods := map[string]bool{"squash": true, "merge": true, "rebase": true}
@@ -392,24 +414,36 @@ func trimVersionPrefix(v string) string {
 	return cleaned
 }
 
-func extractVersionParts(v string) (major string, minor string) {
+func extractMajorVersion(v string) (int, bool) {
 	cleaned := trimVersionPrefix(v)
-	parts := strings.Split(cleaned, ".")
-	major = parts[0]
-	if len(parts) > 1 {
-		minor = parts[1]
+	// Reject compound version ranges (e.g. ">=1.0.0 <2.0.0", "1.0.0, <2.0.0", "1.x || 2.x")
+	// so upper-bound major bumps cannot slip past a single-prefix check.
+	if cleaned == "" || strings.ContainsAny(cleaned, " \t,") || strings.Contains(cleaned, "||") {
+		return 0, false
 	}
-	return major, minor
+	majorStr, _, _ := strings.Cut(cleaned, ".")
+	// Strip prerelease or build metadata attached directly to major (e.g. "2-rc1")
+	if idx := strings.IndexAny(majorStr, "-+"); idx != -1 {
+		majorStr = majorStr[:idx]
+	}
+	major, err := strconv.Atoi(majorStr)
+	if err != nil || major < 0 {
+		return 0, false
+	}
+	return major, true
 }
 
-func checkVersionBump(pkg, oldVer, newVer string) (disallowed bool, reason string) {
-	oldMajor, _ := extractVersionParts(oldVer)
-	newMajor, _ := extractVersionParts(newVer)
+func checkVersionBump(oldVer, newVer string) (disallowed bool, reason string) {
+	oldMajor, okOld := extractMajorVersion(oldVer)
+	newMajor, okNew := extractMajorVersion(newVer)
+	if !okOld || !okNew {
+		return true, fmt.Sprintf("unrecognized version format (%s -> %s)", oldVer, newVer)
+	}
 
 	// SemVer treats 0.x minor bumps as breaking changes, but projects choosing 0.x
 	// tools already accept rapid changes. Also allow 0.x to 1.x as the first stable release.
-	if oldMajor == "0" {
-		if newMajor == "0" || newMajor == "1" {
+	if oldMajor == 0 {
+		if newMajor == 0 || newMajor == 1 {
 			return false, "allowed 0.x or initial stable release"
 		}
 		return true, fmt.Sprintf("major update (%s -> %s)", oldVer, newVer)
@@ -455,18 +489,45 @@ func cleanDependabotBody(body string) string {
 			content = content[:idx]
 		}
 	}
-	// Strip out <details>...</details> blocks to avoid matching release notes, changelogs, or commit logs.
-	content = detailsTagRegex.ReplaceAllString(content, "")
-	return content
+	// Strip out <details>...</details> blocks (including nested ones) by tracking nesting depth.
+	return stripDetailsBlocks(content)
+}
+
+func stripDetailsBlocks(s string) string {
+	locs := detailsTagTokenRegex.FindAllStringIndex(s, -1)
+	if len(locs) == 0 {
+		return s
+	}
+	var out strings.Builder
+	depth := 0
+	lastEnd := 0
+	for _, loc := range locs {
+		token := strings.ToLower(s[loc[0]:loc[1]])
+		if strings.HasPrefix(token, "</details") {
+			if depth > 0 {
+				depth--
+				if depth == 0 {
+					lastEnd = loc[1]
+				}
+			}
+		} else {
+			if depth == 0 {
+				out.WriteString(s[lastEnd:loc[0]])
+			}
+			depth++
+		}
+	}
+	if depth == 0 {
+		out.WriteString(s[lastEnd:])
+	}
+	return out.String()
 }
 
 func checkDependabotBump(title, body string) (disallowed bool, reason string) {
 	if matches := dependabotBumpTitleRegex.FindStringSubmatch(title); matches != nil {
-		pkgIndex := dependabotBumpTitleRegex.SubexpIndex("pkg")
 		oldIndex := dependabotBumpTitleRegex.SubexpIndex("old")
 		newIndex := dependabotBumpTitleRegex.SubexpIndex("new")
 
-		pkg := strings.TrimSpace(matches[pkgIndex])
 		oldVer := cleanVersion(matches[oldIndex])
 		newVer := cleanVersion(matches[newIndex])
 
@@ -474,7 +535,7 @@ func checkDependabotBump(title, body string) (disallowed bool, reason string) {
 			return false, "allowed digest update"
 		}
 
-		return checkVersionBump(pkg, oldVer, newVer)
+		return checkVersionBump(oldVer, newVer)
 	}
 
 	cleanedBody := cleanDependabotBody(body)
@@ -518,7 +579,7 @@ func checkDependabotBump(title, body string) (disallowed bool, reason string) {
 			continue
 		}
 
-		disallowed, reason := checkVersionBump(pkg, oldVer, newVer)
+		disallowed, reason := checkVersionBump(oldVer, newVer)
 		if disallowed {
 			if len(matches) > 1 {
 				return true, fmt.Sprintf("major update for %s (%s -> %s)", pkg, oldVer, newVer)
@@ -540,9 +601,10 @@ func countMarkdownTableDataRows(content string) int {
 	for _, rawLine := range strings.Split(content, "\n") {
 		line := strings.TrimSpace(rawLine)
 		if !strings.HasPrefix(line, "|") {
+			inTable = false
 			continue
 		}
-		if strings.Contains(line, "---") {
+		if tableDelimiterRegex.MatchString(line) && strings.Contains(line, "-") {
 			inTable = true
 			continue
 		}
@@ -593,7 +655,7 @@ func checkRenovateBump(body string) (disallowed bool, reason string) {
 			continue
 		}
 
-		disallowed, reason := checkVersionBump(pkg, oldVer, newVer)
+		disallowed, reason := checkVersionBump(oldVer, newVer)
 		if disallowed {
 			return true, reason
 		}
@@ -606,11 +668,6 @@ func checkRenovateBump(body string) (disallowed bool, reason string) {
 	return false, "non-breaking update"
 }
 
-func isDisallowedDependabotMajor(title string) bool {
-	disallowed, _ := checkDependabotBump(title, "")
-	return disallowed
-}
-
 func isAllowedBot(login string, allowedBots []string) bool {
 	for _, bot := range allowedBots {
 		if login == bot {
@@ -621,7 +678,7 @@ func isAllowedBot(login string, allowedBots []string) bool {
 }
 
 func isCopilotAgent(login string) bool {
-	return strings.Contains(login, "copilot")
+	return strings.Contains(strings.ToLower(login), "copilot")
 }
 
 // Why check reviewer or OWNER/COLLABORATOR/MEMBER:
@@ -888,8 +945,9 @@ func checkEligibility(pr PullRequest, allowedBots []string, reviewer string, met
 	}
 
 	// Step 7: Version bump policy
-	lastBumpReason := "non-breaking update"
-	if strings.Contains(pr.Author.Login, "dependabot") {
+	lowerLogin := strings.ToLower(pr.Author.Login)
+	lastBumpReason := "not applicable"
+	if strings.Contains(lowerLogin, "dependabot") {
 		if disallowed, reason := checkDependabotBump(pr.Title, pr.Body); disallowed {
 			fullReason := fmt.Sprintf("disallowed dependabot bump: %s", reason)
 			steps = append(steps, EvaluationStep{
@@ -907,8 +965,7 @@ func checkEligibility(pr PullRequest, allowedBots []string, reviewer string, met
 		} else {
 			lastBumpReason = reason
 		}
-	}
-	if strings.Contains(pr.Author.Login, "renovate") {
+	} else if strings.Contains(lowerLogin, "renovate") {
 		if disallowed, reason := checkRenovateBump(pr.Body); disallowed {
 			fullReason := fmt.Sprintf("disallowed renovate bump: %s", reason)
 			steps = append(steps, EvaluationStep{
@@ -943,20 +1000,6 @@ func checkEligibility(pr PullRequest, allowedBots []string, reviewer string, met
 	}
 }
 
-func isEligible(pr PullRequest, allowedBots []string, reviewer string) bool {
-	return checkEligibility(pr, allowedBots, reviewer, workflowmeta.Metadata{}).Eligible
-}
-
-func filterEligible(prs []PullRequest, allowedBots []string, reviewer string) []PullRequest {
-	var eligible []PullRequest
-	for _, pr := range prs {
-		if isEligible(pr, allowedBots, reviewer) {
-			eligible = append(eligible, pr)
-		}
-	}
-	return eligible
-}
-
 const mergeableRetryMaxAttempts = 3
 
 // Why 3s retry interval:
@@ -986,20 +1029,24 @@ func shouldRetryMergeable(pr PullRequest, allowedBots []string) bool {
 // or pushes to the base branch. Immediate skipping would delay merging until the next schedule.
 func retryMergeable(ctx context.Context, runner CommandRunner, pr PullRequest, allowedBots []string, reviewer string, meta workflowmeta.Metadata) (PullRequest, EligibilityResult) {
 	currentPR := pr
-	var res EligibilityResult
+	res := checkEligibility(currentPR, allowedBots, reviewer, meta)
 	for attempt := 1; attempt <= mergeableRetryMaxAttempts; attempt++ {
 		fmt.Printf("PR #%d (%s): mergeable status is \"UNKNOWN\". Retrying in %v (attempt %d/%d)...\n",
 			currentPR.Number, currentPR.Title, mergeableRetryInterval, attempt, mergeableRetryMaxAttempts)
 
 		select {
 		case <-ctx.Done():
-			return currentPR, checkEligibility(currentPR, allowedBots, reviewer, meta)
+			return currentPR, res
 		case <-time.After(mergeableRetryInterval):
 		}
 
 		updated, err := runner.FetchPR(ctx, currentPR.Number)
 		if err != nil {
 			fmt.Printf("Warning: failed to refetch PR #%d: %v\n", currentPR.Number, err)
+			break
+		}
+		if updated == nil {
+			fmt.Printf("Warning: refetch returned empty PR for #%d\n", currentPR.Number)
 			break
 		}
 		currentPR = *updated
@@ -1035,24 +1082,75 @@ type osvScanOutput struct {
 	} `json:"results"`
 }
 
+type scanFinding struct {
+	ID      string
+	Package string
+	Version string
+}
+
+func (f scanFinding) key() string {
+	return f.ID + "@" + f.Package
+}
+
+func (f scanFinding) describe() string {
+	if f.Package == "" {
+		return f.ID
+	}
+	if f.Version != "" {
+		return fmt.Sprintf("%s (%s@%s)", f.ID, f.Package, f.Version)
+	}
+	return fmt.Sprintf("%s (%s)", f.ID, f.Package)
+}
+
 type scanResult struct {
-	ids          []string
+	findings     []scanFinding
 	sourceCount  int
 	packageCount int
-	vulnPackages map[string]string // vuln ID -> "packageName@version"
 }
 
 type OSVScanner struct {
 	baseDir     string
-	baseResult  *scanResult
-	baseScanned bool
+	baseResults map[string]*scanResult
 }
 
 func NewOSVScanner(baseDir string) *OSVScanner {
 	if baseDir == "" {
 		baseDir = "."
 	}
-	return &OSVScanner{baseDir: baseDir}
+	return &OSVScanner{
+		baseDir:     baseDir,
+		baseResults: make(map[string]*scanResult),
+	}
+}
+
+func diffScanResults(baseRes, prRes *scanResult) []string {
+	baseSet := make(map[string]bool, len(baseRes.findings))
+	for _, f := range baseRes.findings {
+		baseSet[f.key()] = true
+	}
+
+	seen := make(map[string]bool)
+	var newVulns []string
+	for _, f := range prRes.findings {
+		k := f.key()
+		if !baseSet[k] && !seen[k] {
+			seen[k] = true
+			newVulns = append(newVulns, f.describe())
+		}
+	}
+	sort.Strings(newVulns)
+	return newVulns
+}
+
+func resolveArchiveRef(ctx context.Context, repoDir, baseRefName string) string {
+	if baseRefName != "" {
+		candidate := "origin/" + baseRefName
+		cmd := exec.CommandContext(ctx, "git", "-C", repoDir, "rev-parse", "--verify", "--quiet", candidate)
+		if err := cmd.Run(); err == nil {
+			return candidate
+		}
+	}
+	return "HEAD"
 }
 
 func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (bool, bool, string, error) {
@@ -1066,14 +1164,36 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 	}
 
 	configFile := resolveOSVConfig(repoDir)
+	archiveRef := resolveArchiveRef(ctx, repoDir, pr.BaseRefName)
 
-	if !s.baseScanned {
-		res, err := scanDirectory(ctx, repoDir, configFile)
-		if err != nil {
-			return false, false, "", fmt.Errorf("osv-scanner failed on base repository: %w", err)
+	baseRes, ok := s.baseResults[archiveRef]
+	if !ok {
+		if archiveRef == "HEAD" {
+			res, err := scanDirectory(ctx, repoDir, configFile)
+			if err != nil {
+				return false, false, "", fmt.Errorf("osv-scanner failed on base repository: %w", err)
+			}
+			baseRes = res
+		} else {
+			baseTmp, err := os.MkdirTemp("", "automerge-osv-base-*")
+			if err != nil {
+				return false, false, "", fmt.Errorf("failed to create base temp dir: %w", err)
+			}
+			defer os.RemoveAll(baseTmp)
+
+			if err := extractBaseTree(ctx, repoDir, archiveRef, baseTmp); err != nil {
+				return false, false, "", fmt.Errorf("failed to extract base tree for %s: %w", archiveRef, err)
+			}
+			res, err := scanDirectory(ctx, baseTmp, configFile)
+			if err != nil {
+				return false, false, "", fmt.Errorf("osv-scanner failed on base ref %s: %w", archiveRef, err)
+			}
+			baseRes = res
 		}
-		s.baseResult = res
-		s.baseScanned = true
+		if s.baseResults == nil {
+			s.baseResults = make(map[string]*scanResult)
+		}
+		s.baseResults[archiveRef] = baseRes
 	}
 
 	tmpDir, err := os.MkdirTemp("", "automerge-osv-*")
@@ -1082,7 +1202,7 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if err := extractBaseTree(ctx, repoDir, tmpDir); err != nil {
+	if err := extractBaseTree(ctx, repoDir, archiveRef, tmpDir); err != nil {
 		return false, false, "", fmt.Errorf("failed to extract base tree: %w", err)
 	}
 
@@ -1105,29 +1225,13 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 		return false, true, reason, nil
 	}
 
-	baseSet := make(map[string]bool, len(s.baseResult.ids))
-	for _, id := range s.baseResult.ids {
-		baseSet[id] = true
-	}
-
-	var newVulns []string
-	for _, id := range prRes.ids {
-		if !baseSet[id] {
-			desc := id
-			if pkg := prRes.vulnPackages[id]; pkg != "" {
-				desc = fmt.Sprintf("%s (%s)", id, pkg)
-			}
-			newVulns = append(newVulns, desc)
-		}
-	}
-
+	newVulns := diffScanResults(baseRes, prRes)
 	if len(newVulns) > 0 {
-		sort.Strings(newVulns)
 		return true, false, fmt.Sprintf("new vulnerabilities introduced: %s", strings.Join(newVulns, ", ")), nil
 	}
 
 	return false, false, fmt.Sprintf("no new vulnerabilities introduced (scanned sources: %d, base vulns: %d, pr vulns: %d)",
-		prRes.sourceCount, len(s.baseResult.ids), len(prRes.ids)), nil
+		prRes.sourceCount, len(baseRes.findings), len(prRes.findings)), nil
 }
 
 func diffTouchesFlakeLock(diff string) bool {
@@ -1148,9 +1252,9 @@ func findRepoRoot(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Use `git archive HEAD | tar -x` rather than `cp -r` or `git worktree` so untracked files
+// Use `git archive <ref> | tar -x` rather than `cp -r` or `git worktree` so untracked files
 // and `.git` metadata (hooks, config) are excluded without locking the main repository.
-func extractBaseTree(ctx context.Context, repoRoot, destDir string) error {
+func extractBaseTree(ctx context.Context, repoRoot, ref, destDir string) error {
 	if repoRoot == "" || repoRoot == "." {
 		root, err := findRepoRoot(ctx)
 		if err != nil {
@@ -1158,8 +1262,11 @@ func extractBaseTree(ctx context.Context, repoRoot, destDir string) error {
 		}
 		repoRoot = root
 	}
+	if ref == "" {
+		ref = "HEAD"
+	}
 
-	archiveCmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "archive", "HEAD")
+	archiveCmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "archive", ref)
 	tarCmd := exec.CommandContext(ctx, "tar", "-x", "-C", destDir)
 
 	pr, pw := io.Pipe()
@@ -1171,19 +1278,30 @@ func extractBaseTree(ctx context.Context, repoRoot, destDir string) error {
 	tarCmd.Stderr = &tarErrBuf
 
 	if err := archiveCmd.Start(); err != nil {
+		pr.Close()
 		pw.Close()
 		return fmt.Errorf("failed to start git archive: %w", err)
 	}
 	if err := tarCmd.Start(); err != nil {
+		pr.Close()
 		pw.Close()
+		_ = archiveCmd.Process.Kill()
+		_ = archiveCmd.Wait()
 		return fmt.Errorf("failed to start tar: %w", err)
 	}
 
-	archiveErr := archiveCmd.Wait()
-	pw.Close()
+	// Wait for both ends concurrently and close each pipe side on exit so an early
+	// failure in tar never deadlocks git archive writing to the unbuffered io.Pipe.
+	archiveDone := make(chan error, 1)
+	go func() {
+		err := archiveCmd.Wait()
+		pw.Close()
+		archiveDone <- err
+	}()
 
 	tarErr := tarCmd.Wait()
 	pr.Close()
+	archiveErr := <-archiveDone
 
 	if archiveErr != nil {
 		return fmt.Errorf("git archive failed (%w): %s", archiveErr, strings.TrimSpace(archiveErrBuf.String()))
@@ -1241,9 +1359,13 @@ func scanDirectory(ctx context.Context, dir, configFile string) (*scanResult, er
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
-	// osv-scanner exits with status 1 when vulnerabilities are found, but still produces valid JSON in stdout.
-	if err != nil && stdout.Len() == 0 {
-		return nil, fmt.Errorf("osv-scanner command failed (%w): %s", err, strings.TrimSpace(stderr.String()))
+	// osv-scanner exits with status 1 when vulnerabilities are found, while still emitting valid JSON.
+	// Any other non-zero exit code (network failure, invalid config, etc.) must fail closed.
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || stdout.Len() == 0 {
+			return nil, fmt.Errorf("osv-scanner command failed (%w): %s", err, strings.TrimSpace(stderr.String()))
+		}
 	}
 
 	var scanOut osvScanOutput
@@ -1251,37 +1373,33 @@ func scanDirectory(ctx context.Context, dir, configFile string) (*scanResult, er
 		return nil, fmt.Errorf("failed to parse osv-scanner json output: %w", err)
 	}
 
-	idSet := make(map[string]bool)
-	vulnPackages := make(map[string]string)
+	seen := make(map[string]bool)
+	var findings []scanFinding
 	pkgCount := 0
 	for _, res := range scanOut.Results {
 		pkgCount += len(res.Packages)
 		for _, pkg := range res.Packages {
-			pkgDesc := pkg.Package.Name
-			if pkg.Package.Version != "" {
-				pkgDesc += "@" + pkg.Package.Version
-			}
 			for _, vuln := range pkg.Vulnerabilities {
-				if vuln.ID != "" {
-					idSet[vuln.ID] = true
-					if pkgDesc != "" && vulnPackages[vuln.ID] == "" {
-						vulnPackages[vuln.ID] = pkgDesc
-					}
+				if vuln.ID == "" {
+					continue
+				}
+				f := scanFinding{
+					ID:      vuln.ID,
+					Package: pkg.Package.Name,
+					Version: pkg.Package.Version,
+				}
+				if !seen[f.key()] {
+					seen[f.key()] = true
+					findings = append(findings, f)
 				}
 			}
 		}
 	}
 
-	var ids []string
-	for id := range idSet {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
 	return &scanResult{
-		ids:          ids,
+		findings:     findings,
 		sourceCount:  len(scanOut.Results),
 		packageCount: pkgCount,
-		vulnPackages: vulnPackages,
 	}, nil
 }
 
@@ -1419,6 +1537,7 @@ type geminiContent struct {
 
 type geminiSchema struct {
 	Type       string                   `json:"type"`
+	Enum       []string                 `json:"enum,omitempty"`
 	Properties map[string]*geminiSchema `json:"properties,omitempty"`
 	Required   []string                 `json:"required,omitempty"`
 	Items      *geminiSchema            `json:"items,omitempty"`
@@ -1449,11 +1568,6 @@ type geminiResponse struct {
 	} `json:"error,omitempty"`
 }
 
-type vetoDecision struct {
-	Veto   bool   `json:"veto"`
-	Reason string `json:"reason"`
-}
-
 type geminiFinding struct {
 	Severity    string `json:"severity"`
 	Category    string `json:"category"`
@@ -1466,24 +1580,36 @@ type geminiReviewReport struct {
 	Findings  []geminiFinding `json:"findings"`
 }
 
+var allowedSafeLevels = map[string]bool{
+	"NONE":   true,
+	"LOW":    true,
+	"MEDIUM": true,
+}
+
 func evaluateGeminiReport(report geminiReviewReport) (bool, string) {
-	var criticalOrHighFindings []string
+	var vetoFindings []string
 	for _, f := range report.Findings {
 		sev := strings.ToUpper(strings.TrimSpace(f.Severity))
-		if sev == "CRITICAL" || sev == "HIGH" {
-			criticalOrHighFindings = append(criticalOrHighFindings, fmt.Sprintf("[%s] %s: %s", sev, f.Category, f.Description))
+		if !allowedSafeLevels[sev] {
+			if sev == "" {
+				sev = "UNKNOWN"
+			}
+			vetoFindings = append(vetoFindings, fmt.Sprintf("[%s] %s: %s", sev, f.Category, f.Description))
 		}
 	}
 
 	risk := strings.ToUpper(strings.TrimSpace(report.RiskLevel))
-	if risk == "CRITICAL" || risk == "HIGH" || len(criticalOrHighFindings) > 0 {
-		if len(criticalOrHighFindings) > 0 {
-			return true, strings.Join(criticalOrHighFindings, "; ")
+	if !allowedSafeLevels[risk] || len(vetoFindings) > 0 {
+		if len(vetoFindings) > 0 {
+			return true, strings.Join(vetoFindings, "; ")
+		}
+		if risk == "" {
+			return true, "unrecognized or empty risk_level in LLM response"
 		}
 		if report.Summary != "" {
 			return true, fmt.Sprintf("[%s] %s", risk, report.Summary)
 		}
-		return true, fmt.Sprintf("high risk level detected: %s", risk)
+		return true, fmt.Sprintf("unacceptable or unrecognized risk level: %s", risk)
 	}
 
 	if report.Summary != "" {
@@ -1550,14 +1676,14 @@ func (g *GeminiReviewer) ReviewPR(ctx context.Context, pr PullRequest, diff stri
 			ResponseSchema: &geminiSchema{
 				Type: "OBJECT",
 				Properties: map[string]*geminiSchema{
-					"risk_level": {Type: "STRING"},
+					"risk_level": {Type: "STRING", Enum: []string{"NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"}},
 					"summary":    {Type: "STRING"},
 					"findings": {
 						Type: "ARRAY",
 						Items: &geminiSchema{
 							Type: "OBJECT",
 							Properties: map[string]*geminiSchema{
-								"severity":    {Type: "STRING"},
+								"severity":    {Type: "STRING", Enum: []string{"NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"}},
 								"category":    {Type: "STRING"},
 								"description": {Type: "STRING"},
 							},
@@ -1760,6 +1886,7 @@ func buildStepSummary(results []PRSummaryResult, meta workflowmeta.Metadata) str
 	sb.WriteString("- **Draft**: Pull request is in draft state.\n")
 	sb.WriteString("- **Mergeable**: GitHub mergeable state is not clean (e.g. unknown or conflicting).\n")
 	sb.WriteString("- **CI**: Status checks are incomplete or failed.\n")
+	sb.WriteString("- **Review approval**: Pull request requires maintainer review approval.\n")
 	sb.WriteString("- **Version bump policy**: Dependency update was disallowed (e.g. major version bump or unrecognized update format).\n")
 	sb.WriteString("- **Diff**: Failed to fetch pull request git diff.\n")
 	sb.WriteString("- **Vulnerability scan**: Differential vulnerability scan (`osv-scanner`) detected new vulnerabilities.\n")
@@ -1801,6 +1928,31 @@ func appendFile(path string, content string) error {
 	defer f.Close()
 	_, err = f.WriteString(content)
 	return err
+}
+
+var outputLeakChecker leakcheck.Checker = &leakcheck.BetterleaksChecker{}
+
+func postRequestChangesSafe(ctx context.Context, runner CommandRunner, number int, body string) {
+	if err := outputLeakChecker.Check(ctx, body); err != nil {
+		fmt.Printf("Warning: pre-flight leak check blocked review on PR #%d: %v\n", number, err)
+		return
+	}
+	if err := runner.RequestChangesPR(ctx, number, body); err != nil {
+		fmt.Printf("Warning: failed to request changes on PR #%d: %v\n", number, err)
+	}
+}
+
+func postCommentSafe(ctx context.Context, runner CommandRunner, number int, body string) string {
+	if err := outputLeakChecker.Check(ctx, body); err != nil {
+		fmt.Printf("Warning: pre-flight leak check blocked comment on PR #%d: %v\n", number, err)
+		return ""
+	}
+	commentURL, err := runner.CommentPR(ctx, number, body)
+	if err != nil {
+		fmt.Printf("Warning: failed to post comment for PR #%d: %v\n", number, err)
+		return ""
+	}
+	return commentURL
 }
 
 func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LLMReviewer, vulnScanner VulnerabilityScanner, meta workflowmeta.Metadata) error {
@@ -1846,7 +1998,6 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 				// Why not label transient skips (CI pending/failure, conflicts):
 				// Transient skips usually resolve with subsequent pushes or CI retries.
 				// Label only policy blocks (e.g. major bumps) so humans can filter PRs that need review.
-				var commentURL string
 				if !hasLabel(pr, blockedLabelName) {
 					if err := runner.EnsureLabel(ctx, blockedLabelName, blockedLabelDescription, blockedLabelColor); err != nil {
 						fmt.Printf("Warning: failed to ensure label %q: %v\n", blockedLabelName, err)
@@ -1865,18 +2016,15 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 					fullSteps := completeSkippedSteps(res.Steps, cfg)
 					reviewBody := fmt.Sprintf("Automerge was skipped because %s. Marking with `%s` for manual review.\n\nThis review may block merging if the repository requires review approvals. If you still want to merge this pull request, please dismiss this review.\n\n%s\n%s",
 						res.Reason, blockedLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
-					if err := runner.RequestChangesPR(ctx, pr.Number, reviewBody); err != nil {
-						fmt.Printf("Warning: failed to request changes on blocked PR #%d: %v\n", pr.Number, err)
-					}
+					postRequestChangesSafe(ctx, runner, pr.Number, reviewBody)
 				}
 				summaries = append(summaries, PRSummaryResult{
-					Number:     pr.Number,
-					Title:      pr.Title,
-					Author:     pr.Author.Login,
-					Action:     ActionBlocked,
-					Source:     res.Source,
-					Reason:     res.Reason,
-					CommentURL: commentURL,
+					Number: pr.Number,
+					Title:  pr.Title,
+					Author: pr.Author.Login,
+					Action: ActionBlocked,
+					Source: res.Source,
+					Reason: res.Reason,
 				})
 			} else {
 				summaries = append(summaries, PRSummaryResult{
@@ -1937,7 +2085,6 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 
 				if veto {
 					fmt.Printf("PR #%d (%s): VETOED by vulnerability scan: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
-					var commentURL string
 					if !hasLabel(pr, vetoLabelName) {
 						if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
 							fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
@@ -1961,18 +2108,15 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 						// Posting both an issue comment and a review would create duplicate notifications and clutter the timeline.
 						reviewBody := fmt.Sprintf("Automerge was vetoed by vulnerability scan: %s. Marking with `%s`.\n\nAs long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after resolving the vulnerability or pushing new commits.\n\nThis review may block merging if the repository requires review approvals. If you still want to merge this pull request, please dismiss this review.\n\n%s\n%s",
 							reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
-						if err := runner.RequestChangesPR(ctx, pr.Number, reviewBody); err != nil {
-							fmt.Printf("Warning: failed to request changes on vetoed PR #%d: %v\n", pr.Number, err)
-						}
+						postRequestChangesSafe(ctx, runner, pr.Number, reviewBody)
 					}
 					summaries = append(summaries, PRSummaryResult{
-						Number:     pr.Number,
-						Title:      pr.Title,
-						Author:     pr.Author.Login,
-						Action:     ActionVetoed,
-						Source:     SourceVulnerability,
-						Reason:     fmt.Sprintf("vulnerability scan: %s", reason),
-						CommentURL: commentURL,
+						Number: pr.Number,
+						Title:  pr.Title,
+						Author: pr.Author.Login,
+						Action: ActionVetoed,
+						Source: SourceVulnerability,
+						Reason: fmt.Sprintf("vulnerability scan: %s", reason),
 					})
 					return
 				}
@@ -2025,7 +2169,6 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 
 				if veto {
 					fmt.Printf("PR #%d (%s): VETOED by LLM veto: %s. Marking with %q label and skipping merge.\n", pr.Number, pr.Title, reason, vetoLabelName)
-					var commentURL string
 					if !hasLabel(pr, vetoLabelName) {
 						if err := runner.EnsureLabel(ctx, vetoLabelName, vetoLabelDescription, vetoLabelColor); err != nil {
 							fmt.Printf("Warning: failed to ensure label %q: %v\n", vetoLabelName, err)
@@ -2049,18 +2192,15 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 						// Posting both an issue comment and a review would create duplicate notifications and clutter the timeline.
 						reviewBody := fmt.Sprintf("Automerge was vetoed by LLM veto: %s. Marking with `%s`.\n\nAs long as this label is attached, automerge will skip this pull request. Remove the label to run automerge again after updating the review bot or pushing new commits.\n\nThis review may block merging if the repository requires review approvals. If you still want to merge this pull request, please dismiss this review.\n\n%s\n%s",
 							reason, vetoLabelName, formatEvaluationSteps(fullSteps), meta.ProvenanceText("Inspected"))
-						if err := runner.RequestChangesPR(ctx, pr.Number, reviewBody); err != nil {
-							fmt.Printf("Warning: failed to request changes on vetoed PR #%d: %v\n", pr.Number, err)
-						}
+						postRequestChangesSafe(ctx, runner, pr.Number, reviewBody)
 					}
 					summaries = append(summaries, PRSummaryResult{
-						Number:     pr.Number,
-						Title:      pr.Title,
-						Author:     pr.Author.Login,
-						Action:     ActionVetoed,
-						Source:     SourceLLMVeto,
-						Reason:     fmt.Sprintf("LLM veto: %s", reason),
-						CommentURL: commentURL,
+						Number: pr.Number,
+						Title:  pr.Title,
+						Author: pr.Author.Login,
+						Action: ActionVetoed,
+						Source: SourceLLMVeto,
+						Reason: fmt.Sprintf("LLM veto: %s", reason),
 					})
 					return
 				}
@@ -2095,10 +2235,7 @@ func execute(ctx context.Context, cfg *Config, runner CommandRunner, reviewer LL
 				// a merge attempt can fail due to race conditions or conflicts.
 				commentBody := fmt.Sprintf("Merged automatically.\n\n%s\n%s",
 					formatEvaluationSteps(prSteps), meta.ProvenanceText("Merged automatically"))
-				commentURL, err := runner.CommentPR(ctx, pr.Number, commentBody)
-				if err != nil {
-					fmt.Printf("Warning: failed to post merge comment for PR #%d: %v\n", pr.Number, err)
-				}
+				commentURL := postCommentSafe(ctx, runner, pr.Number, commentBody)
 				summaries = append(summaries, PRSummaryResult{
 					Number:     pr.Number,
 					Title:      pr.Title,
