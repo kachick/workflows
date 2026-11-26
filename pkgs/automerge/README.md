@@ -2,6 +2,39 @@
 
 Merge eligible bot pull requests via polling.
 
+## Flow
+
+```mermaid
+flowchart TD
+  Start["Scheduled run on default branch (GitHub App token)"]
+  List["gh pr list (open PRs)"]
+  Det{"Deterministic checks (bot, not draft, no veto/block label, MERGEABLE, green CI, version policy, maintainer approval for Copilot)"}
+  Skip1["Skip (no label, retry on next poll)"]
+  Block["Add automerge:blocked + request reviewer + REQUEST_CHANGES"]
+  Diff["gh pr diff"]
+  OSV{"OSV-Scanner diff (base branch osv-scanner.toml)"}
+  Veto["Add automerge:vetoed + request reviewer + REQUEST_CHANGES"]
+  SkipErr["Fail-closed: Skip for next poll"]
+  LLM{"Optional LLM veto (Gemini API via x-goog-api-key)"}
+  Merge["gh pr merge (--delete-branch)"]
+  Comment["leakcheck + post merge comment + step summary"]
+
+  Start --> List --> Det
+  Det -->|"temporary / ineligible / already labeled"| Skip1
+  Det -->|"policy block (e.g. major bump)"| Block
+  Det -->|"eligible"| Diff
+  Diff -->|"fetch error"| SkipErr
+  Diff -->|"ok"| OSV
+  OSV -->|"new CVE found"| Veto
+  OSV -->|"scan error"| SkipErr
+  OSV -->|"clean or no supported lockfiles"| LLM
+  LLM -->|"disabled or no risks"| Merge
+  LLM -->|"risk detected"| Veto
+  LLM -->|"missing key / timeout / error"| SkipErr
+  Merge -->|"conflict / race"| SkipErr
+  Merge -->|"merged"| Comment
+```
+
 ## Background & Motivation
 
 Maintaining safe bot merges across `kachick/*` repositories requires strict security boundaries and shared rules.

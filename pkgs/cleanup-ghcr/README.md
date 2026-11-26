@@ -2,6 +2,28 @@
 
 Prune old GHCR container package versions or remove temporary PR staging versions.
 
+## Flow
+
+```mermaid
+flowchart TD
+  PruneWF["reusable-cleanup-ghcr.yml (packages: write)"]
+  StagingWF["reusable-cleanup-ghcr-staging.yml"]
+  MinJob["Job: minimize-old-comments (if body-includes set, pull-requests: write)"]
+  MinCLI["minimize-pr-comments"]
+  PruneCLI["cleanup-ghcr --mode=prune"]
+  StagingCLI["cleanup-ghcr --mode=staging (packages: write, pull-requests: write)"]
+  List["List GHCR container versions (GitHub REST API)"]
+  SelectPrune["Keep newest N versions, delete older (up to max-delete)"]
+  SelectStaging["Find versions tagged pr-<number>-* and delete them"]
+  Comment["leakcheck + post deleted version IDs to PR comment"]
+
+  PruneWF --> PruneCLI --> List
+  StagingWF --> MinJob --> MinCLI
+  StagingWF --> StagingCLI --> List
+  List -->|"prune mode"| SelectPrune
+  List -->|"staging mode"| SelectStaging --> Comment
+```
+
 ## Usage
 
 ### Prune Old Versions (`reusable-cleanup-ghcr.yml`)

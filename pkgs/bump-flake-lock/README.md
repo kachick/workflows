@@ -4,6 +4,32 @@ Update `flake.lock` and create a pull request with GitHub App.
 
 Optionally runs a command after `flake.lock` is updated (for example, to update related CI dependencies) and commits the generated changes before opening the pull request.
 
+## Flow
+
+```mermaid
+flowchart TD
+  Start["Scheduled / manual run (GitHub App token, persist-credentials: false)"]
+  Switch["git switch -C <branch> and nix flake update --commit-lock-file"]
+  PostCmd{"post-commit-lock-file set?"}
+  RunPost["Run post-command without GITHUB_TOKEN / GH_TOKEN"]
+  CommitPost["If working tree changed: leakcheck (title + staged diff) and git commit"]
+  CheckCommits{"Commits ahead of default branch?"}
+  NoOp["Exit 0 (nothing to push)"]
+  PayloadCheck["Build PR body (flake.lock diff + provenance) and leakcheck (title, body, log, diff)"]
+  Push["gh auth setup-git and git push --force"]
+  PROpen{"PR already OPEN?"}
+  CreatePR["gh pr create"]
+  EditPR["gh pr edit --body"]
+
+  Start --> Switch --> PostCmd
+  PostCmd -->|"yes"| RunPost --> CommitPost --> CheckCommits
+  PostCmd -->|"no"| CheckCommits
+  CheckCommits -->|"no"| NoOp
+  CheckCommits -->|"yes"| PayloadCheck --> Push --> PROpen
+  PROpen -->|"no"| CreatePR
+  PROpen -->|"yes"| EditPR
+```
+
 ## Usage
 
 ### Reusable Workflow

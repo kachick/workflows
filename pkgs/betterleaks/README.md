@@ -2,6 +2,21 @@
 
 Scan secrets across git repository history using upstream betterleaks binary.
 
+## Flow
+
+```mermaid
+flowchart TD
+  Start["reusable-betterleaks.yml (ubuntu-slim, contents: read, no Nix)"]
+  Validate["Validate betterleaks-version format (X.Y.Z)"]
+  Download["gh release download tarball + checksums.txt (betterleaks/betterleaks)"]
+  Verify["Verify tarball with sha256sum --check"]
+  Install["Extract binary to RUNNER_TEMP/bin and add to GITHUB_PATH"]
+  Checkout["actions/checkout (fetch-depth: 0, persist-credentials: false)"]
+  Scan["betterleaks git . --redact=100"]
+
+  Start --> Validate --> Download --> Verify --> Install --> Checkout --> Scan
+```
+
 ## Usage
 
 ```yaml

@@ -2,6 +2,26 @@
 
 Minimize outdated bot comments matching pattern on a pull request.
 
+## Flow
+
+```mermaid
+flowchart TD
+  Start["reusable-minimize-pr-comments.yml or CLI (pull-requests: write)"]
+  Fetch["List PR comments via internal/gh"]
+  Filter["Match non-minimized github-actions[bot] comments containing --marker"]
+  Minimize["GraphQL minimizeComment (classifier: OUTDATED)"]
+  Perm{"ErrPermissionDenied?"}
+  Warn["Print ::warning:: and exit 0"]
+  Fail["Print error and exit 1"]
+  Done["Print minimized count and exit 0"]
+
+  Start --> Fetch --> Filter --> Minimize
+  Minimize -->|"ok"| Done
+  Minimize -->|"error"| Perm
+  Perm -->|"yes"| Warn
+  Perm -->|"no"| Fail
+```
+
 ## Features
 
 - **Match substring markers**:

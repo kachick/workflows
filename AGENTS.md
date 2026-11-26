@@ -12,9 +12,11 @@
 
 - `README.md`: Essential daily operations and quick references (such as PR triage) for personal use; keep it solid.
 - `docs/onboarding.md`: Caller onboarding, available workflows, and schedule distribution rules.
-- `pkgs/<name>/README.md`: Workflow-specific details and instructions that are not constantly needed in the root `README.md`.
+- `docs/architecture.md`: Repository-wide structure, trust boundaries, and Go package dependency diagrams.
+- `pkgs/<name>/README.md`: Workflow-specific details, instructions, and package-level Mermaid flow diagrams that are not constantly needed in the root `README.md`.
 - `NOTES.md`: Repository-wide topics; separate desired requirements and priorities in upper sections from current choices driven by technical constraints in lower sections.
 - `AGENTS.md`: Maintainer preferences and common LLM pitfalls; keep every item concise.
+- When changing workflow steps, trust boundaries, or package dependencies, update the matching Mermaid diagrams in `docs/architecture.md` and `pkgs/<name>/README.md` in the same change.
 
 ## Ecosystem & Language Priorities
 

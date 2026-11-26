@@ -2,6 +2,35 @@
 
 Post Nix closure differences on pull requests when `flake.lock` changes.
 
+## Flow
+
+```mermaid
+flowchart TD
+  Start["pull_request on flake.lock (fetch-depth: 0, github.token)"]
+  Diff["Evaluate base vs head derivations (nix path-info + nix store diff-closures)"]
+  OSV{"check-vulnerabilities?"}
+  Query["OSV batch query (POST /v1/querybatch) and classify New / Resolved / Existing"]
+  Report["Build report (UTF-8 safe truncate + full artifact files)"]
+  Leak["internal/leakcheck (betterleaks pre-flight scan)"]
+  Outputs["Write GITHUB_OUTPUT and GITHUB_STEP_SUMMARY"]
+  Post["minimize-pr-comments + post PR comment (warn on 403)"]
+  ErrCheck{"Target eval or OSV error?"}
+  FailErr["Exit 1 (fail-closed after posting report)"]
+  Artifact["Workflow step: upload nix-diff-full artifact (if has_diff)"]
+  Gate{"Workflow step: has_vulnerabilities == true?"}
+  FailGate["Exit 1 (stop automerge)"]
+  Done["Exit 0"]
+
+  Start --> Diff --> OSV
+  OSV -->|"yes"| Query --> Report
+  OSV -->|"no"| Report
+  Report --> Leak --> Outputs --> Post --> ErrCheck
+  ErrCheck -->|"yes"| FailErr
+  ErrCheck -->|"no"| Artifact --> Gate
+  Gate -->|"yes"| FailGate
+  Gate -->|"no"| Done
+```
+
 ## Features and Non-Obvious Requirements
 
 - **Multiple targets in a single run**:
