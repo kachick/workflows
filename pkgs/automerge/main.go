@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -302,7 +303,7 @@ func parseAllowedBots(input string) []string {
 	}
 
 	var bots []string
-	for _, b := range strings.Split(input, ",") {
+	for b := range strings.SplitSeq(input, ",") {
 		trimmed := strings.TrimSpace(b)
 		if trimmed != "" {
 			bots = append(bots, trimmed)
@@ -598,7 +599,7 @@ func checkDependabotBump(title, body string) (disallowed bool, reason string) {
 func countMarkdownTableDataRows(content string) int {
 	inTable := false
 	dataRows := 0
-	for _, rawLine := range strings.Split(content, "\n") {
+	for rawLine := range strings.SplitSeq(content, "\n") {
 		line := strings.TrimSpace(rawLine)
 		if !strings.HasPrefix(line, "|") {
 			inTable = false
@@ -669,12 +670,7 @@ func checkRenovateBump(body string) (disallowed bool, reason string) {
 }
 
 func isAllowedBot(login string, allowedBots []string) bool {
-	for _, bot := range allowedBots {
-		if login == bot {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowedBots, login)
 }
 
 func isCopilotAgent(login string) bool {
@@ -1235,7 +1231,7 @@ func (s *OSVScanner) ScanPR(ctx context.Context, pr PullRequest, diff string) (b
 }
 
 func diffTouchesFlakeLock(diff string) bool {
-	for _, line := range strings.Split(diff, "\n") {
+	for line := range strings.SplitSeq(diff, "\n") {
 		if strings.HasPrefix(line, "diff --git ") && strings.Contains(line, "flake.lock") {
 			return true
 		}

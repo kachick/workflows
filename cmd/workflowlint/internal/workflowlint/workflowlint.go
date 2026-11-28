@@ -402,7 +402,7 @@ func isStrictOwnerGuard(ifExpr string) bool {
 	if strings.Contains(expr, "||") {
 		return false
 	}
-	for _, clause := range strings.Split(expr, "&&") {
+	for clause := range strings.SplitSeq(expr, "&&") {
 		c := strings.TrimSpace(clause)
 		c = strings.Trim(c, "()")
 		c = strings.TrimSpace(c)

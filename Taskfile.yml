@@ -19,9 +19,14 @@ tasks:
   fmt:
     cmds:
       - dprint fmt
+  fix:
+    cmds:
+      - CGO_ENABLED=0 go fix ./...
   lint:
     cmds:
       - CGO_ENABLED=0 go vet ./...
+      - CGO_ENABLED=0 go fix -diff ./...
+      - CGO_ENABLED=0 go mod tidy -diff
       - go run ./cmd/workflowlint
       - dprint check
       - typos . .github

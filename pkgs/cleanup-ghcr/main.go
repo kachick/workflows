@@ -146,7 +146,7 @@ func selectPruneTargets(versions []packageVersion, keepLatest int, maxDelete int
 
 	deleteCount := min(len(sorted)-keepLatest, maxDelete)
 	ids := make([]int64, 0, deleteCount)
-	for i := 0; i < deleteCount; i++ {
+	for i := range deleteCount {
 		ids = append(ids, sorted[i].ID)
 	}
 	return ids

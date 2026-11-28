@@ -18,20 +18,20 @@ func ExtractPackageChanges(diffText string) (before []Package, after []Package) 
 	seenBefore := make(map[string]bool)
 	seenAfter := make(map[string]bool)
 
-	lines := strings.Split(diffText, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(diffText, "\n")
+	for line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 
-		colonIdx := strings.Index(trimmed, ":")
-		if colonIdx == -1 {
+		rawPkgName, rawRest, ok := strings.Cut(trimmed, ":")
+		if !ok {
 			continue
 		}
 
-		pkgName := strings.TrimSpace(trimmed[:colonIdx])
-		rest := strings.TrimSpace(trimmed[colonIdx+1:])
+		pkgName := strings.TrimSpace(rawPkgName)
+		rest := strings.TrimSpace(rawRest)
 
 		// Arrow can be "→" (\u2192) or ASCII "->"
 		arrowIdx := strings.Index(rest, "→")

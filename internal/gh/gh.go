@@ -118,9 +118,9 @@ func (c *Client) MinimizeComment(ctx context.Context, nodeID string) error {
 		}
 	}`
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"query": query,
-		"variables": map[string]interface{}{
+		"variables": map[string]any{
 			"subjectId": nodeID,
 		},
 	}

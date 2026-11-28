@@ -193,7 +193,7 @@ func (e *Engine) computeWhyDepends(ctx context.Context, headDrv string, diffText
 	}
 
 	pathMap := make(map[string]string)
-	for _, p := range strings.Split(headPathsRaw, "\n") {
+	for p := range strings.SplitSeq(headPathsRaw, "\n") {
 		trimmed := strings.TrimSpace(p)
 		if trimmed == "" {
 			continue
@@ -300,7 +300,7 @@ func simplifyWhyDependsOutput(s string) string {
 	})
 
 	var lines []string
-	for _, line := range strings.Split(s, "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		lines = append(lines, strings.TrimRight(line, " \t\r"))
 	}
 
