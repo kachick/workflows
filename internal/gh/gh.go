@@ -3,7 +3,7 @@ package gh
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -84,7 +84,7 @@ func (c *Client) FindOutdatedComments(ctx context.Context, owner, repo string, p
 		}
 
 		var comments []commentItem
-		err = json.NewDecoder(resp.Body).Decode(&comments)
+		err = json.UnmarshalRead(resp.Body, &comments)
 		resp.Body.Close()
 		if err != nil {
 			return nil, err
@@ -163,7 +163,7 @@ func (c *Client) MinimizeComment(ctx context.Context, nodeID string) error {
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&gqlResp); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &gqlResp); err != nil {
 		return fmt.Errorf("decode graphql response: %w", err)
 	}
 	if len(gqlResp.Errors) > 0 {

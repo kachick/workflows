@@ -2,7 +2,7 @@ package gh
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"
@@ -35,7 +35,7 @@ func TestFindOutdatedComments(t *testing.T) {
 				comments[0].NodeID = "node_1"
 				comments[0].Body = "Hello <!-- nix-diff-closures-report -->"
 				comments[0].User.Login = "github-actions[bot]"
-				_ = json.NewEncoder(w).Encode(comments)
+				_ = json.MarshalWrite(w, comments)
 			case "2":
 				comments := []commentItem{
 					{
@@ -46,9 +46,9 @@ func TestFindOutdatedComments(t *testing.T) {
 						}{Login: "github-actions[bot]"},
 					},
 				}
-				_ = json.NewEncoder(w).Encode(comments)
+				_ = json.MarshalWrite(w, comments)
 			default:
-				_ = json.NewEncoder(w).Encode([]commentItem{})
+				_ = json.MarshalWrite(w, []commentItem{})
 			}
 		}))
 		defer ts.Close()
@@ -165,7 +165,7 @@ func TestMinimizeOutdatedComments(t *testing.T) {
 					}{Login: "github-actions[bot]"},
 				},
 			}
-			_ = json.NewEncoder(w).Encode(comments)
+			_ = json.MarshalWrite(w, comments)
 		case "/graphql":
 			minimized++
 			_, _ = w.Write([]byte(`{"data":{"minimizeComment":{"minimizedComment":{"isMinimized":true}}}}`))
@@ -201,7 +201,7 @@ func TestPostComment(t *testing.T) {
 					return
 				}
 				var payload map[string]string
-				_ = json.NewDecoder(r.Body).Decode(&payload)
+				_ = json.UnmarshalRead(r.Body, &payload)
 				if payload["body"] == "test comment" {
 					posted = true
 					w.WriteHeader(http.StatusCreated)

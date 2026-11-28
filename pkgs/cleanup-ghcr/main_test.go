@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -91,13 +91,13 @@ func TestExecuteStagingFlow(t *testing.T) {
 			v.ID = 555
 			v.Metadata.Container.Tags = []string{"pr-7-amd64", "pr-7-arm64"}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode([]packageVersion{v})
+			_ = json.MarshalWrite(w, []packageVersion{v})
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/users/kachick/packages/container/"):
 			deletedPaths = append(deletedPaths, r.URL.EscapedPath())
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/repos/kachick/home/issues/7/comments":
 			var payload map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&payload)
+			_ = json.UnmarshalRead(r.Body, &payload)
 			postedBody = payload["body"]
 			w.WriteHeader(http.StatusCreated)
 		default:

@@ -3,7 +3,7 @@ package osv
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -136,7 +136,7 @@ func (c *Client) postBatchOnce(ctx context.Context, data []byte, queryCount int)
 	}
 
 	var res batchQueryResponse
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &res); err != nil {
 		return nil, false, fmt.Errorf("failed to decode OSV response: %w", err)
 	}
 

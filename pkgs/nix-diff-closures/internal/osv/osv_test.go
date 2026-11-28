@@ -2,7 +2,7 @@ package osv
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -32,7 +32,7 @@ func TestQueryBatch(t *testing.T) {
 			}
 
 			var req batchQueryRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if err := json.UnmarshalRead(r.Body, &req); err != nil {
 				t.Fatalf("failed to decode request: %v", err)
 			}
 
@@ -54,7 +54,7 @@ func TestQueryBatch(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(res)
+			_ = json.MarshalWrite(w, res)
 		}))
 		defer ts.Close()
 
@@ -117,7 +117,7 @@ func TestQueryBatch(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(res)
+			_ = json.MarshalWrite(w, res)
 		}))
 		defer ts.Close()
 
@@ -187,7 +187,7 @@ func TestQueryBatch(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(res)
+			_ = json.MarshalWrite(w, res)
 		}))
 		defer ts.Close()
 
@@ -220,7 +220,7 @@ func TestQueryBatch(t *testing.T) {
 				Results: []queryResult{{Vulns: nil}},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(res)
+			_ = json.MarshalWrite(w, res)
 		}))
 		defer ts.Close()
 
@@ -276,7 +276,7 @@ func TestQueryBatch(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			calls++
 			var req batchQueryRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if err := json.UnmarshalRead(r.Body, &req); err != nil {
 				t.Fatalf("failed to decode request: %v", err)
 			}
 			if len(req.Queries) > 2 {
@@ -301,7 +301,7 @@ func TestQueryBatch(t *testing.T) {
 				}
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(res)
+			_ = json.MarshalWrite(w, res)
 		}))
 		defer ts.Close()
 
@@ -339,7 +339,7 @@ func TestQueryBatch(t *testing.T) {
 		var batchSizes []int
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req batchQueryRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if err := json.UnmarshalRead(r.Body, &req); err != nil {
 				t.Fatalf("failed to decode request: %v", err)
 			}
 			batchSizes = append(batchSizes, len(req.Queries))
@@ -358,7 +358,7 @@ func TestQueryBatch(t *testing.T) {
 				}
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(res)
+			_ = json.MarshalWrite(w, res)
 		}))
 		defer ts.Close()
 

@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -80,7 +80,7 @@ func (c *ghcrClient) ListVersions(ctx context.Context, owner, pkgName string) ([
 		}
 
 		var batch []packageVersion
-		err = json.NewDecoder(resp.Body).Decode(&batch)
+		err = json.UnmarshalRead(resp.Body, &batch)
 		resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("decode package versions: %w", err)
