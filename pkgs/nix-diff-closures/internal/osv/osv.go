@@ -17,7 +17,22 @@ const DefaultEndpoint = "https://api.osv.dev/v1/querybatch"
 // MaxBatchSize is the maximum number of queries allowed by OSV /v1/querybatch per request.
 const MaxBatchSize = 1000
 
-const maxPaginationRounds = 20
+// DefaultBatchSize is the default chunk size for OSV batch queries.
+//
+// Why not MaxBatchSize (1000):
+// Nix packages are queried without an ecosystem, so OSV searches across all ecosystems.
+// Sending 1000 cross-ecosystem queries in one HTTP request often exceeds client timeouts
+// on large nixpkgs updates. Smaller chunks keep each request fast and predictable.
+const DefaultBatchSize = 100
+
+// DefaultTimeout is the per-request HTTP timeout for OSV API calls.
+const DefaultTimeout = 45 * time.Second
+
+const (
+	defaultMaxRetries     = 3
+	defaultRetryBaseDelay = 1 * time.Second
+	maxPaginationRounds   = 20
+)
 
 // Package represents an updated or newly added package to query in OSV.
 type Package struct {
@@ -62,9 +77,11 @@ type queryResult struct {
 
 // Client queries the OSV API.
 type Client struct {
-	Endpoint   string
-	HTTPClient *http.Client
-	BatchSize  int
+	Endpoint       string
+	HTTPClient     *http.Client
+	BatchSize      int
+	MaxRetries     int
+	RetryBaseDelay time.Duration
 }
 
 // NewClient returns a new OSV API client.
@@ -75,10 +92,48 @@ func NewClient(endpoint string) *Client {
 	return &Client{
 		Endpoint: endpoint,
 		HTTPClient: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout: DefaultTimeout,
 		},
-		BatchSize: MaxBatchSize,
+		BatchSize:      DefaultBatchSize,
+		MaxRetries:     defaultMaxRetries,
+		RetryBaseDelay: defaultRetryBaseDelay,
 	}
+}
+
+func isRetryableStatus(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests || (statusCode >= 500 && statusCode < 600)
+}
+
+func (c *Client) postBatchOnce(ctx context.Context, data []byte, queryCount int) ([]queryResult, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint, bytes.NewReader(data))
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to create OSV request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		// Do not retry if the caller context itself was canceled or expired.
+		retryable := ctx.Err() == nil
+		return nil, retryable, fmt.Errorf("OSV request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, isRetryableStatus(resp.StatusCode), fmt.Errorf("OSV API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var res batchQueryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, false, fmt.Errorf("failed to decode OSV response: %w", err)
+	}
+
+	if len(res.Results) != queryCount {
+		return nil, false, fmt.Errorf("OSV response count mismatch: expected %d, got %d", queryCount, len(res.Results))
+	}
+
+	return res.Results, false, nil
 }
 
 func (c *Client) postBatch(ctx context.Context, queries []queryItem) ([]queryResult, error) {
@@ -87,33 +142,36 @@ func (c *Client) postBatch(ctx context.Context, queries []queryItem) ([]queryRes
 		return nil, fmt.Errorf("failed to encode OSV request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint, bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OSV request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("OSV request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("OSV API returned status %d: %s", resp.StatusCode, string(body))
+	maxRetries := max(c.MaxRetries, 0)
+	baseDelay := c.RetryBaseDelay
+	if baseDelay <= 0 {
+		baseDelay = defaultRetryBaseDelay
 	}
 
-	var res batchQueryResponse
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		return nil, fmt.Errorf("failed to decode OSV response: %w", err)
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := baseDelay << (attempt - 1)
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, fmt.Errorf("OSV request canceled during retry backoff: %w", ctx.Err())
+			case <-timer.C:
+			}
+		}
+
+		results, retryable, err := c.postBatchOnce(ctx, data, len(queries))
+		if err == nil {
+			return results, nil
+		}
+		lastErr = err
+		if !retryable {
+			return nil, err
+		}
 	}
 
-	if len(res.Results) != len(queries) {
-		return nil, fmt.Errorf("OSV response count mismatch: expected %d, got %d", len(queries), len(res.Results))
-	}
-
-	return res.Results, nil
+	return nil, lastErr
 }
 
 // QueryBatch queries OSV for vulnerabilities affecting the specified packages,
@@ -125,6 +183,8 @@ func (c *Client) QueryBatch(ctx context.Context, pkgs []Package) ([]PackageVulne
 
 	batchSize := c.BatchSize
 	if batchSize <= 0 {
+		batchSize = DefaultBatchSize
+	} else if batchSize > MaxBatchSize {
 		batchSize = MaxBatchSize
 	}
 

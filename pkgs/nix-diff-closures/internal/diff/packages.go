@@ -83,6 +83,29 @@ func ExtractUpdatedPackages(diffText string) []Package {
 	return after
 }
 
+// nonVersionSuffixes lists source archive and metadata derivation suffixes that appear
+// alongside real package versions in derivation closure diffs (for example, "2.16.0.0.tar.gz.drv"
+// or "2.15.0.1-r1.cabal.drv"). Querying OSV with these adds noise and inflates batch sizes.
+var nonVersionSuffixes = []string{
+	".tar.gz",
+	".tar.xz",
+	".tar.bz2",
+	".tar.zst",
+	".tgz",
+	".zip",
+	".cabal",
+	".diff",
+}
+
+func isNonVersionToken(token string) bool {
+	for _, suffix := range nonVersionSuffixes {
+		if strings.HasSuffix(token, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 func parseVersions(part string) []string {
 	tokens := strings.Split(part, ",")
 	var rawVersions []string
@@ -102,7 +125,7 @@ func parseVersions(part string) []string {
 		}
 		// Strip .drv suffix from derivation closure diffs so OSV version matching works against upstream versions.
 		t = strings.TrimSuffix(t, ".drv")
-		if t == "" {
+		if t == "" || isNonVersionToken(t) {
 			continue
 		}
 		rawVersions = append(rawVersions, t)

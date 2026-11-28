@@ -65,6 +65,18 @@ archlinux-chromium: 146-drop-unknown-clang-flag.patch.drv → ∅
 `,
 			expected: nil,
 		},
+		{
+			name: "ignores source archive and metadata derivation tokens while keeping versions",
+			diffText: `
+QuickCheck: 2.15.0.1-r1.cabal.drv, 2.15.0.1.drv, 2.15.0.1.tar.gz.drv → 2.16.0.0.drv, 2.16.0.0.tar.gz.drv
+foo: 1.0.tar.xz.drv, 1.0.zip.drv → 1.1.drv, 1.1.tar.zst.drv
+bar: 93a56205.diff.drv → ∅
+`,
+			expected: []Package{
+				{Name: "QuickCheck", Version: "2.16.0.0"},
+				{Name: "foo", Version: "1.1"},
+			},
+		},
 	}
 
 	for _, tt := range tests {

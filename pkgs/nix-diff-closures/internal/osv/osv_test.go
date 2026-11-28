@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestQueryBatch(t *testing.T) {
@@ -148,13 +149,17 @@ func TestQueryBatch(t *testing.T) {
 		}
 	})
 
-	t.Run("handles HTTP error status", func(t *testing.T) {
+	t.Run("handles HTTP error status after retries", func(t *testing.T) {
+		calls := 0
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
 			http.Error(w, "rate limited", http.StatusTooManyRequests)
 		}))
 		defer ts.Close()
 
 		client := NewClient(ts.URL)
+		client.MaxRetries = 2
+		client.RetryBaseDelay = time.Millisecond
 		pkgs := []Package{
 			{Name: "pkg", Version: "1.0.0"},
 		}
@@ -162,6 +167,107 @@ func TestQueryBatch(t *testing.T) {
 		_, err := client.QueryBatch(context.Background(), pkgs)
 		if err == nil {
 			t.Fatal("expected error, got nil")
+		}
+		if calls != 3 {
+			t.Fatalf("expected 3 attempts (1 initial + 2 retries), got %d", calls)
+		}
+	})
+
+	t.Run("retries on client timeout and succeeds", func(t *testing.T) {
+		calls := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if calls == 1 {
+				time.Sleep(80 * time.Millisecond)
+				return
+			}
+			res := batchQueryResponse{
+				Results: []queryResult{
+					{Vulns: []Vulnerability{{ID: "CVE-2026-1234"}}},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(res)
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		client.HTTPClient = &http.Client{Timeout: 30 * time.Millisecond}
+		client.MaxRetries = 2
+		client.RetryBaseDelay = time.Millisecond
+
+		results, err := client.QueryBatch(context.Background(), []Package{{Name: "pkg", Version: "1.0.0"}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if calls != 2 {
+			t.Fatalf("expected 2 attempts, got %d", calls)
+		}
+		if len(results) != 1 || results[0].Vulnerabilities[0].ID != "CVE-2026-1234" {
+			t.Fatalf("unexpected results: %#v", results)
+		}
+	})
+
+	t.Run("retries on 5xx and succeeds", func(t *testing.T) {
+		calls := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if calls == 1 {
+				http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			res := batchQueryResponse{
+				Results: []queryResult{{Vulns: nil}},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(res)
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		client.MaxRetries = 2
+		client.RetryBaseDelay = time.Millisecond
+
+		results, err := client.QueryBatch(context.Background(), []Package{{Name: "pkg", Version: "1.0.0"}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if calls != 2 {
+			t.Fatalf("expected 2 attempts, got %d", calls)
+		}
+		if len(results) != 0 {
+			t.Fatalf("expected 0 results, got %#v", results)
+		}
+	})
+
+	t.Run("does not retry on 400 Bad Request", func(t *testing.T) {
+		calls := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			http.Error(w, "bad request", http.StatusBadRequest)
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		client.MaxRetries = 2
+		client.RetryBaseDelay = time.Millisecond
+
+		_, err := client.QueryBatch(context.Background(), []Package{{Name: "pkg", Version: "1.0.0"}})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if calls != 1 {
+			t.Fatalf("expected 1 attempt without retry, got %d", calls)
+		}
+	})
+
+	t.Run("uses DefaultBatchSize for NewClient", func(t *testing.T) {
+		client := NewClient("")
+		if client.BatchSize != DefaultBatchSize {
+			t.Fatalf("expected BatchSize %d, got %d", DefaultBatchSize, client.BatchSize)
+		}
+		if client.HTTPClient.Timeout != DefaultTimeout {
+			t.Fatalf("expected Timeout %v, got %v", DefaultTimeout, client.HTTPClient.Timeout)
 		}
 	})
 
