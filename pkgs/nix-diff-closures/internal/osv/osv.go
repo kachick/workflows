@@ -26,12 +26,23 @@ const MaxBatchSize = 1000
 const DefaultBatchSize = 100
 
 // DefaultTimeout is the per-request HTTP timeout for OSV API calls.
-const DefaultTimeout = 45 * time.Second
+//
+// Why 90s:
+// Paginated follow-up requests for large packages (such as linux) can take 30-40s
+// when before/after queries share a batch.
+const DefaultTimeout = 90 * time.Second
 
 const (
 	defaultMaxRetries     = 3
 	defaultRetryBaseDelay = 1 * time.Second
-	maxPaginationRounds   = 20
+	maxPaginationRounds   = 100
+	// paginationBatchSize caps batch size on follow-up pagination rounds (round > 0).
+	//
+	// Why 3:
+	// OSV caps a single /v1/querybatch response at 3,000 vulnerabilities total and 1,000 per query.
+	// Packing more than 3 paginated queries into one request hits the 3,000-item response cap,
+	// adding extra rounds and increasing per-request latency.
+	paginationBatchSize = 3
 )
 
 // Package represents an updated or newly added package to query in OSV.
@@ -204,9 +215,14 @@ func (c *Client) QueryBatch(ctx context.Context, pkgs []Package) ([]PackageVulne
 			return nil, fmt.Errorf("OSV pagination exceeded %d rounds", maxPaginationRounds)
 		}
 
+		roundBatchSize := batchSize
+		if round > 0 {
+			roundBatchSize = min(roundBatchSize, paginationBatchSize)
+		}
+
 		var nextPending []pendingItem
-		for start := 0; start < len(pending); start += batchSize {
-			end := min(start+batchSize, len(pending))
+		for start := 0; start < len(pending); start += roundBatchSize {
+			end := min(start+roundBatchSize, len(pending))
 			chunk := pending[start:end]
 
 			queries := make([]queryItem, len(chunk))

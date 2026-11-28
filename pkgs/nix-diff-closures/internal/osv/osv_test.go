@@ -335,6 +335,54 @@ func TestQueryBatch(t *testing.T) {
 		}
 	})
 
+	t.Run("caps batch size on follow-up pagination rounds", func(t *testing.T) {
+		var batchSizes []int
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req batchQueryRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("failed to decode request: %v", err)
+			}
+			batchSizes = append(batchSizes, len(req.Queries))
+
+			res := batchQueryResponse{Results: make([]queryResult, len(req.Queries))}
+			for i, q := range req.Queries {
+				if q.PageToken == "" {
+					res.Results[i] = queryResult{
+						Vulns:         []Vulnerability{{ID: "CVE-2026-0001"}},
+						NextPageToken: "page2",
+					}
+				} else {
+					res.Results[i] = queryResult{
+						Vulns: []Vulnerability{{ID: "CVE-2026-0002"}},
+					}
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(res)
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		pkgs := []Package{
+			{Name: "pkg1", Version: "1.0"},
+			{Name: "pkg2", Version: "1.0"},
+			{Name: "pkg3", Version: "1.0"},
+			{Name: "pkg4", Version: "1.0"},
+		}
+
+		results, err := client.QueryBatch(context.Background(), pkgs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 4 {
+			t.Fatalf("expected 4 affected packages, got %d", len(results))
+		}
+		expectedBatchSizes := []int{4, 3, 1}
+		if !reflect.DeepEqual(batchSizes, expectedBatchSizes) {
+			t.Fatalf("expected batch sizes %v, got %v", expectedBatchSizes, batchSizes)
+		}
+	})
+
 	t.Run("fails on response result count mismatch", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
